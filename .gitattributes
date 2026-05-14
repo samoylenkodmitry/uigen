@@ -1,0 +1,5 @@
+*.bmp binary
+*.wsz binary
+*.f32 binary
+assets/default_skin/* -text
+assets/default_skin/* binary

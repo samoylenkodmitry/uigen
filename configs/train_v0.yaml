@@ -1,0 +1,29 @@
+input:
+  width: 768
+  height: 1280
+atlas:
+  width: 1024
+  height: 1024
+  profile: configs/atlas_v1.json
+export:
+  profile: configs/export_profile_classic.json
+data:
+  root: data_v0
+  split_by: skin_id
+geonet:
+  rect_count: 80
+  state_count: 32
+  train_eq_band_heatmaps: false
+slotnet:
+  active_slots:
+    - MAIN
+    - TITLEBAR
+    - CBUTTONS
+    - SHUFREP
+    - MONOSTER
+    - PLAYPAUS
+    - EQMAIN
+    - PLEDIT
+    - POSBAR
+    - VOLUME
+    - BALANCE

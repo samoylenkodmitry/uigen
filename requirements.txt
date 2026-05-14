@@ -1,0 +1,12 @@
+torch
+torchvision
+numpy
+pillow
+opencv-python
+pandas
+tqdm
+pyyaml
+matplotlib
+tensorboard
+safetensors
+pytest

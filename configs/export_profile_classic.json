@@ -1,0 +1,18 @@
+{
+  "MAIN.bmp": {"slot": "MAIN", "w": 275, "h": 115},
+  "TITLEBAR.bmp": {"slot": "TITLEBAR", "w": 344, "h": 87},
+  "CBUTTONS.bmp": {"slot": "CBUTTONS", "w": 136, "h": 36},
+  "SHUFREP.bmp": {"slot": "SHUFREP", "w": 92, "h": 85},
+  "MONOSTER.bmp": {"slot": "MONOSTER", "w": 56, "h": 24},
+  "PLAYPAUS.bmp": {"slot": "PLAYPAUS", "w": 42, "h": 9},
+  "NUMBERS.bmp": {"slot": "NUMBERS", "w": 99, "h": 13},
+  "TEXT.bmp": {"slot": "TEXT", "w": 155, "h": 18},
+  "EQMAIN.bmp": {"slot": "EQMAIN", "w": 275, "h": 315},
+  "PLEDIT.bmp": {"slot": "PLEDIT", "w": 280, "h": 186},
+  "POSBAR.bmp": {"slot": "POSBAR", "w": 307, "h": 10},
+  "EQ_EX.bmp": {"slot": "EQ_EX", "w": 275, "h": 56},
+  "VOLUME.bmp": {"slot": "VOLUME", "w": 68, "h": 433},
+  "BALANCE.bmp": {"slot": "BALANCE", "w": 47, "h": 433},
+  "GEN.bmp": {"slot": "GEN", "w": 178, "h": 103},
+  "VIDEO.bmp": {"slot": "VIDEO", "w": 233, "h": 119}
+}

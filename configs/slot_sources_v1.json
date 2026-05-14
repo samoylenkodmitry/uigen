@@ -1,0 +1,31 @@
+{
+  "active_v0_slots": [
+    "MAIN",
+    "TITLEBAR",
+    "CBUTTONS",
+    "SHUFREP",
+    "MONOSTER",
+    "PLAYPAUS",
+    "EQMAIN",
+    "PLEDIT",
+    "POSBAR",
+    "VOLUME",
+    "BALANCE"
+  ],
+  "ignored_v0_slots": [
+    "NUMBERS",
+    "TEXT",
+    "EQ_EX",
+    "GEN",
+    "VIDEO",
+    "RESERVED_A",
+    "RESERVED_B"
+  ],
+  "zero_loss_files": [
+    "NUMBERS.bmp",
+    "TEXT.bmp",
+    "EQ_EX.bmp",
+    "GEN.bmp",
+    "VIDEO.bmp"
+  ]
+}

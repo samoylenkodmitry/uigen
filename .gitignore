@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+data/
+data_v0/
+debug/
+runs/
+eval/
+out_skin/
+*.wsz
+*.f32
+
+!.gitkeep
