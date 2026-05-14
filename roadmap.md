@@ -1,9 +1,9 @@
 # Cranamp Render-to-Atlas Inverter V0 Roadmap — v4
 
-- [ ] Treat this file as the single implementation roadmap for the coding agent.
-- [ ] Keep this roadmap in the fresh repo as `roadmap.md`.
-- [ ] The user will handle phase-zero skin collection separately.
-- [ ] The coding agent will do all implementation work in one repo; do not split into separate agents.
+- [x] Treat this file as the single implementation roadmap for the coding agent.
+- [x] Keep this roadmap in the fresh repo as `roadmap.md`.
+- [x] The user will handle phase-zero skin collection separately.
+- [x] The coding agent will do all implementation work in one repo; do not split into separate agents.
 - [ ] V0 goal: learn `randomized Cranamp render of a known skin -> exact packed atlas of that same skin`.
 - [ ] V0 inference path: `AI-generated Winamp-like mockup -> GeoNet80 -> SlotNetV1 -> packed atlas -> split atlas into BMP files -> .wsz/Cranamp skin folder`.
 - [ ] V0 is a foundation model, not the final creative KITTENAMP/GPT/Gemini product.
@@ -24,7 +24,7 @@
 
 ## Revision notes from Gemini/Opus review
 
-- [ ] Keep the offline saved dataset pipeline; do not switch V0 to on-the-fly/FFI data generation.
+- [x] Keep the offline saved dataset pipeline; do not switch V0 to on-the-fly/FFI data generation.
 - [ ] Add Cranamp render-throughput benchmarking before generating large datasets.
 - [ ] Add explicit Cranamp work for `visible_atlas_mask`; this is renderer instrumentation, not a trivial script.
 - [ ] Verify Cranamp magenta behavior before enabling magenta snapping/loss.
@@ -33,7 +33,7 @@
 - [ ] Add random letterbox/padding augmentation for GeoNet and SlotNet.
 - [ ] Add conditional shallow SlotNet path for tiny slots.
 - [ ] Keep RGB output in V0, but strengthen edge loss and add a blur-control escalation path.
-- [ ] Make export-size validity a 100% hard gate.
+- [x] Make export-size validity a 100% hard gate.
 - [ ] Make `--rect-mix-ratio 0.5` explicit for SlotNet Stage B.
 - [ ] Add state-anchor jitter for GeoNet state regression to avoid train/inference brittleness.
 - [ ] Specify GeoNet state feature sampling as 3x3 average pooling on FPN `P`, not single-pixel lookup.
@@ -41,8 +41,8 @@
 - [ ] Add SlotNet scale-ratio conditioning channels so the model knows how much the source crop was down/up-sampled.
 - [ ] Track rare pressed-state/hidden-state slot metrics; only increase variants or enable state-balanced rendering if metrics show muddy state sprites.
 - [ ] Specify visible-atlas provenance as a separate `u32` ID buffer to avoid destroying Cranamp RGB render hot-path throughput.
-- [ ] Use a per-slot magenta policy schema, not a single global magenta boolean.
-- [ ] Add deterministic EQ band subdivision unit test shared by training and inference.
+- [x] Use a per-slot magenta policy schema, not a single global magenta boolean.
+- [x] Add deterministic EQ band subdivision unit test shared by training and inference.
 - [ ] Add gradient accumulation fallback for GeoNet/SlotNet OOM instead of silently reducing real batch too far.
 - [ ] Clarify Smoke training validates pipeline/loadability only, not visual quality.
 - [ ] Keep differentiable compositor, atlas prior, creative render-loss, and custom Cranamp extensions out of V0.
@@ -50,24 +50,24 @@
 ## Revision notes from final Gemini/Opus review
 
 - [ ] Keep V0 architecture unchanged; only add implementation hardening items from final review.
-- [ ] Use mask-sum-normalized RGB/Sobel losses, not flat tensor means, so sparse/padded slots train at the same active-pixel gradient scale as dense slots.
-- [ ] Add `configs/state_regions_v1.json` so pressed/normal/hidden-state metrics are not guessed by the agent.
+- [x] Use mask-sum-normalized RGB/Sobel losses, not flat tensor means, so sparse/padded slots train at the same active-pixel gradient scale as dense slots.
+- [x] Add `configs/state_regions_v1.json` so pressed/normal/hidden-state metrics are not guessed by the agent.
 - [x] Expose `--state-balanced` in the Cranamp CLI and dataset script, but keep it disabled by default.
-- [ ] Change SlotNet scale conditioning from raw ratios to log-ratios: `log_scale_x = log(max(scale_x, 1e-6))`, `log_scale_y = log(max(scale_y, 1e-6))`.
-- [ ] Cap GeoNet state-anchor jitter by component size: no more than ±2 stride-4 cells and no more than ±25% of the anchor width/height in grid cells.
+- [x] Change SlotNet scale conditioning from raw ratios to log-ratios: `log_scale_x = log(max(scale_x, 1e-6))`, `log_scale_y = log(max(scale_y, 1e-6))`.
+- [x] Cap GeoNet state-anchor jitter by component size: no more than ±2 stride-4 cells and no more than ±25% of the anchor width/height in grid cells.
 - [ ] Add a numeric rare-state failure trigger: if `pressed_state_rgb_mae > 1.5 * normal_state_rgb_mae` for any state-bearing slot, regenerate with `--variants 32 --state-balanced`.
-- [ ] Keep offline saved datasets; do not adopt on-the-fly FFI generation for V0.
-- [ ] Keep VGG/perceptual/GAN loss out of default V0.
+- [x] Keep offline saved datasets; do not adopt on-the-fly FFI generation for V0.
+- [x] Keep VGG/perceptual/GAN loss out of default V0.
 - [ ] Treat v4 as the final handoff spec unless implementation discovers a concrete Cranamp/runtime bug.
 
 ## 0. Hard project framing
 
-- [ ] Source training truth is always a real existing skin folder or `.wsz`.
+- [x] Source training truth is always a real existing skin folder or `.wsz`.
 - [ ] Each source skin contains separate BMP files, for example `MAIN.bmp`, `EQMAIN.bmp`, `PLEDIT.bmp`, `CBUTTONS.bmp`, `TITLEBAR.bmp`, `VOLUME.bmp`, `BALANCE.bmp`, `SHUFREP.bmp`, `POSBAR.bmp`, `MONOSTER.bmp`, `PLAYPAUS.bmp`, `TEXT.bmp`, `NUMBERS.bmp`, and optional extras.
-- [ ] Pack each source skin’s BMP files into one fixed `1024x1024` atlas; that packed atlas is the model target.
+- [x] Pack each source skin’s BMP files into one fixed `1024x1024` atlas; that packed atlas is the model target.
 - [ ] Modify or fork Cranamp so it can render the source skin into randomized 3-window views and also output exact component rects/states.
 - [ ] Generate training data forward only: `source skin -> packed atlas target` and `source skin -> randomized Cranamp render input + rect/state labels`.
-- [ ] Save generated views/rects/states/masks to disk before training; do not generate Cranamp renders inside the PyTorch dataloader in V0.
+- [x] Save generated views/rects/states/masks to disk before training; do not generate Cranamp renders inside the PyTorch dataloader in V0.
 - [ ] If disk I/O becomes a bottleneck, pack offline samples into tar/LMDB-style shards; do not switch the V0 design to on-the-fly rendering.
 - [ ] Model1 `GeoNet80` learns `view.png -> rect vector + state vector`.
 - [ ] Model2 `SlotNetV1` learns `view.png + rect vector + state vector -> source skin atlas slots`.
@@ -81,43 +81,43 @@
 ## 1. Repository structure
 
 - [ ] Create repo root `cranamp-atlas-ai/`.
-- [ ] Create `roadmap.mf` at repo root.
-- [ ] Create `requirements.txt`.
-- [ ] Create `configs/`.
-- [ ] Create `configs/atlas_v1.json`.
-- [ ] Create `configs/components_v1.json`.
-- [ ] Create `configs/slot_sources_v1.json`.
-- [ ] Create `configs/state_regions_v1.json`.
-- [ ] Create `configs/export_profile_classic.json`.
-- [ ] Create `configs/train_v0.yaml`.
-- [ ] Create `assets/default_skin/` for fallback/default classic assets.
-- [ ] Create `cranamp_cli/` for the Cranamp fork/submodule/wrapper.
-- [ ] Create `cranamp_cli/README.md` documenting how to point to the user’s Cranamp repo.
-- [ ] Create `scripts/00_scan_skins.py`.
-- [ ] Create `scripts/01_pack_skins.py`.
+- [x] Create `roadmap.mf` at repo root.
+- [x] Create `requirements.txt`.
+- [x] Create `configs/`.
+- [x] Create `configs/atlas_v1.json`.
+- [x] Create `configs/components_v1.json`.
+- [x] Create `configs/slot_sources_v1.json`.
+- [x] Create `configs/state_regions_v1.json`.
+- [x] Create `configs/export_profile_classic.json`.
+- [x] Create `configs/train_v0.yaml`.
+- [x] Create `assets/default_skin/` for fallback/default classic assets.
+- [x] Create `cranamp_cli/` for the Cranamp fork/submodule/wrapper.
+- [x] Create `cranamp_cli/README.md` documenting how to point to the user’s Cranamp repo.
+- [x] Create `scripts/00_scan_skins.py`.
+- [x] Create `scripts/01_pack_skins.py`.
 - [x] Create `scripts/02_render_dataset.py`.
-- [ ] Create `scripts/03_make_splits.py`.
-- [ ] Create `scripts/04_check_dataset.py`.
-- [ ] Create `scripts/05_export_atlas_to_skin.py`.
+- [x] Create `scripts/03_make_splits.py`.
+- [x] Create `scripts/04_check_dataset.py`.
+- [x] Create `scripts/05_export_atlas_to_skin.py`.
 - [x] Create `scripts/06_benchmark_cranamp.py`.
-- [ ] Create `scripts/07_verify_magenta.py`.
-- [ ] Create `scripts/08_pack_dataset_shards.py` as optional fallback if small-file I/O becomes a bottleneck.
-- [ ] Create `models/geonet80.py`.
-- [ ] Create `models/slotnet_v1.py`.
-- [ ] Create `models/losses.py`.
-- [ ] Create `models/crop.py`.
-- [ ] Create `models/atlas.py`.
-- [ ] Create `train_geonet.py`.
-- [ ] Create `train_slotnet.py`.
-- [ ] Create `eval_pipeline.py`.
-- [ ] Create `infer_skin.py`.
-- [ ] Create `tests/test_atlas_pack.py`.
-- [ ] Create `tests/test_rect_encoding.py`.
-- [ ] Create `tests/test_slot_crop.py`.
-- [ ] Create `tests/test_export_skin.py`.
-- [ ] Create `debug/` for generated debug visualizations, not committed.
-- [ ] Create `data/` for generated datasets, not committed.
-- [ ] Add `.gitignore` entries for `data/`, `debug/`, `runs/`, `eval/`, `*.wsz`, and large generated files.
+- [x] Create `scripts/07_verify_magenta.py`.
+- [x] Create `scripts/08_pack_dataset_shards.py` as optional fallback if small-file I/O becomes a bottleneck.
+- [x] Create `models/geonet80.py`.
+- [x] Create `models/slotnet_v1.py`.
+- [x] Create `models/losses.py`.
+- [x] Create `models/crop.py`.
+- [x] Create `models/atlas.py`.
+- [x] Create `train_geonet.py`.
+- [x] Create `train_slotnet.py`.
+- [x] Create `eval_pipeline.py`.
+- [x] Create `infer_skin.py`.
+- [x] Create `tests/test_atlas_pack.py`.
+- [x] Create `tests/test_rect_encoding.py`.
+- [x] Create `tests/test_slot_crop.py`.
+- [x] Create `tests/test_export_skin.py`.
+- [x] Create `debug/` for generated debug visualizations, not committed.
+- [x] Create `data/` for generated datasets, not committed.
+- [x] Add `.gitignore` entries for `data/`, `debug/`, `runs/`, `eval/`, `*.wsz`, and large generated files.
 
 ## 2. Python/runtime stack
 
@@ -155,13 +155,13 @@ safetensors
 ## 3. Phase zero skin collection input contract
 
 - [ ] The user will download/collect as many Winamp skins as possible.
-- [ ] The repo must expect raw skins at `skins_raw/`.
-- [ ] Support `.wsz` zip files under `skins_raw/`.
-- [ ] Support plain unpacked skin directories under `skins_raw/`.
-- [ ] Support skin directories containing mixed-case filenames.
-- [ ] Normalize filenames case-insensitively internally, e.g. `MAIN.bmp`, `main.bmp`, `Main.BMP` all map to `MAIN.bmp`.
-- [ ] Preserve original file paths in metadata for debugging.
-- [ ] Do not require every optional BMP to exist.
+- [x] The repo must expect raw skins at `skins_raw/`.
+- [x] Support `.wsz` zip files under `skins_raw/`.
+- [x] Support plain unpacked skin directories under `skins_raw/`.
+- [x] Support skin directories containing mixed-case filenames.
+- [x] Normalize filenames case-insensitively internally, e.g. `MAIN.bmp`, `main.bmp`, `Main.BMP` all map to `MAIN.bmp`.
+- [x] Preserve original file paths in metadata for debugging.
+- [x] Do not require every optional BMP to exist.
 - [ ] Reject only skins Cranamp cannot load/render at all.
 
 Expected raw input examples:
@@ -640,38 +640,38 @@ reserved:          1.0
 
 ## 11. Visible atlas mask
 
-- [ ] Every rendered sample must include `visible_atlas_mask.png`.
-- [ ] Visible atlas mask shape is `1024x1024`.
-- [ ] Visible atlas mask mode is grayscale `L`.
-- [ ] Mask value is `255` if the atlas pixel was sampled/drawn into the rendered view.
-- [ ] Mask value is `0` otherwise.
-- [ ] When Cranamp blits a sprite/asset pixel to the rendered view, it must mark the corresponding atlas pixel visible.
+- [x] Every rendered sample must include `visible_atlas_mask.png`.
+- [x] Visible atlas mask shape is `1024x1024`.
+- [x] Visible atlas mask mode is grayscale `L`.
+- [x] Mask value is `255` if the atlas pixel was sampled/drawn into the rendered view.
+- [x] Mask value is `0` otherwise.
+- [x] When Cranamp blits a sprite/asset pixel to the rendered view, it must mark the corresponding atlas pixel visible.
 - [ ] This requires modifying Cranamp renderer internals; budget this as real Cranamp work, not a dataset-script detail.
 - [ ] Implement provenance by carrying `(slot_id, atlas_x, atlas_y)` through each draw call or by a dedicated tracking pass that draws atlas IDs into a side buffer.
 - [ ] Prefer a separate `u32` side buffer over per-pixel writes inside the RGB buffer so provenance tracking can be optimized independently.
-- [ ] Use the same provenance encoding as Section 4: `0` means no atlas source, otherwise `1 + (slot_id << 20) + (atlas_y << 10) + atlas_x`.
-- [ ] Verify visible mask with unit/integration tests before using it in SlotNet loss.
+- [x] Use the same provenance encoding as Section 4: `0` means no atlas source, otherwise `1 + (slot_id << 20) + (atlas_y << 10) + atlas_x`.
+- [x] Verify visible mask with unit/integration tests before using it in SlotNet loss.
 - [ ] Use visible atlas mask because a single render does not show every button state, slider frame, titlebar state, or hidden source pixel.
-- [ ] During SlotNet loss, compute `effective_loss_mask = atlas_mask * (0.25 + 0.75 * visible_atlas_mask)` after normalizing visible mask to `0..1`.
-- [ ] Hidden atlas pixels still train through base `0.25` weight.
-- [ ] Visible atlas pixels receive full `1.0` weight.
+- [x] During SlotNet loss, compute `effective_loss_mask = atlas_mask * (0.25 + 0.75 * visible_atlas_mask)` after normalizing visible mask to `0..1`.
+- [x] Hidden atlas pixels still train through base `0.25` weight.
+- [x] Visible atlas pixels receive full `1.0` weight.
 
 ## 12. Randomized Cranamp dataset generation
 
-- [ ] Generate views offline and save them.
+- [x] Generate views offline and save them.
 - [ ] Before generating V0/V1, run `scripts/06_benchmark_cranamp.py` and record render throughput.
 - [ ] Use multiple Cranamp worker processes if render throughput is slower than `0.50 s/render` or CPU has unused cores.
 - [ ] Do not generate views on the fly during model training.
 - [x] Implement `scripts/02_render_dataset.py` to call `cranamp-cli render-random`.
 - [x] Use deterministic seed per `(skin_id, variant_id)`.
 - [ ] Use `seed = stable_hash(skin_id) * 1000003 + variant_id`.
-- [ ] Save all generated files to disk.
+- [x] Save all generated files to disk.
 - [ ] Keep loose files for SMOKE/V0 unless dataloader profiling shows GPU starvation.
 - [ ] If GPU utilization is below `80%` due to file I/O, run optional `scripts/08_pack_dataset_shards.py` to pack samples into sequential shards.
-- [ ] Save `params.json` for replay and validation.
-- [ ] Save exact rects from Cranamp.
-- [ ] Save exact state vector from Cranamp.
-- [ ] Save visible atlas mask from Cranamp.
+- [x] Save `params.json` for replay and validation.
+- [x] Save exact rects from Cranamp.
+- [x] Save exact state vector from Cranamp.
+- [x] Save visible atlas mask from Cranamp.
 - [ ] Do not mutate skin style in V0.
 - [ ] Do not create AI/diffusion-generated views in V0.
 - [ ] Do not rotate windows in V0.
@@ -713,11 +713,11 @@ data_v0/params/{skin_id}_{variant_id}.json
 
 ### 12.1 Render canvas
 
-- [ ] Use canvas width `768`.
-- [ ] Use canvas height `1280`.
-- [ ] Use RGB output.
-- [ ] Use solid dark background RGB `(16,16,16)` or Cranamp default background.
-- [ ] Keep background choice deterministic and logged in params.
+- [x] Use canvas width `768`.
+- [x] Use canvas height `1280`.
+- [x] Use RGB output.
+- [x] Use solid dark background RGB `(16,16,16)` or Cranamp default background.
+- [x] Keep background choice deterministic and logged in params.
 
 ### 12.2 Window scale and placement distributions
 
@@ -804,15 +804,15 @@ data_v0/params/{skin_id}_{variant_id}.json
 
 ## 13. Dataset splits
 
-- [ ] Implement `scripts/03_make_splits.py`.
-- [ ] Split by `skin_id`, never by variant.
-- [ ] Ensure no skin appears in more than one split.
-- [ ] Use default train split `0.80`.
-- [ ] Use default validation split `0.10`.
-- [ ] Use default test split `0.10`.
-- [ ] Write `data_v0/train.csv`.
-- [ ] Write `data_v0/val.csv`.
-- [ ] Write `data_v0/test.csv`.
+- [x] Implement `scripts/03_make_splits.py`.
+- [x] Split by `skin_id`, never by variant.
+- [x] Ensure no skin appears in more than one split.
+- [x] Use default train split `0.80`.
+- [x] Use default validation split `0.10`.
+- [x] Use default test split `0.10`.
+- [x] Write `data_v0/train.csv`.
+- [x] Write `data_v0/val.csv`.
+- [x] Write `data_v0/test.csv`.
 
 Command:
 
@@ -852,20 +852,20 @@ params_json
 
 ## 15. Dataset checking and debug contact sheets
 
-- [ ] Implement `scripts/04_check_dataset.py`.
-- [ ] Verify every CSV path exists.
-- [ ] Verify every view is `768x1280` RGB.
-- [ ] Verify every rect file has exactly `80*5` float32 values.
-- [ ] Verify every state file has exactly `32` float32 values.
-- [ ] Verify every atlas is `1024x1024` RGB.
-- [ ] Verify every atlas mask is `1024x1024` grayscale.
-- [ ] Verify every visible mask is `1024x1024` grayscale.
-- [ ] Verify rect coordinates are in `[0,1]` or zeroed when invisible.
-- [ ] Verify visible flags are `0.0` or `1.0`.
-- [ ] Verify slot weights are present and valid.
-- [ ] Generate debug contact sheet of 32 random samples with rect overlays.
+- [x] Implement `scripts/04_check_dataset.py`.
+- [x] Verify every CSV path exists.
+- [x] Verify every view is `768x1280` RGB.
+- [x] Verify every rect file has exactly `80*5` float32 values.
+- [x] Verify every state file has exactly `32` float32 values.
+- [x] Verify every atlas is `1024x1024` RGB.
+- [x] Verify every atlas mask is `1024x1024` grayscale.
+- [x] Verify every visible mask is `1024x1024` grayscale.
+- [x] Verify rect coordinates are in `[0,1]` or zeroed when invisible.
+- [x] Verify visible flags are `0.0` or `1.0`.
+- [x] Verify slot weights are present and valid.
+- [x] Generate debug contact sheet of 32 random samples with rect overlays.
 - [ ] Generate debug atlas/mask contact sheet of 16 random atlases.
-- [ ] Fail fast on shape mismatch.
+- [x] Fail fast on shape mismatch.
 
 Command:
 
@@ -875,17 +875,17 @@ python scripts/04_check_dataset.py --data data_v0
 
 ## 16. Model 1: GeoNet80 task
 
-- [ ] Implement `models/geonet80.py`.
-- [ ] GeoNet80 input is `view image [B, 3, 1280, 768]`.
-- [ ] GeoNet80 output includes CenterNet-style heatmaps.
-- [ ] GeoNet80 output includes width/height maps.
-- [ ] GeoNet80 output includes offset maps.
-- [ ] GeoNet80 output includes state vector `[B, 32]`.
-- [ ] GeoNet80 decoded output must be `rects [B, 80, 5]` and `states [B, 32]`.
-- [ ] Use CenterNet-style fixed-class detector instead of YOLO.
-- [ ] Use 80 fixed component classes.
+- [x] Implement `models/geonet80.py`.
+- [x] GeoNet80 input is `view image [B, 3, 1280, 768]`.
+- [x] GeoNet80 output includes CenterNet-style heatmaps.
+- [x] GeoNet80 output includes width/height maps.
+- [x] GeoNet80 output includes offset maps.
+- [x] GeoNet80 output includes state vector `[B, 32]`.
+- [x] GeoNet80 decoded output must be `rects [B, 80, 5]` and `states [B, 32]`.
+- [x] Use CenterNet-style fixed-class detector instead of YOLO.
+- [x] Use 80 fixed component classes.
 - [ ] Use stride-4 detection head to reduce small-component/EQ-band localization noise.
-- [ ] Use EQ-band postprocessing from `eq_sliders_group` as the V0 default.
+- [x] Use EQ-band postprocessing from `eq_sliders_group` as the V0 default.
 - [ ] Do not spend GeoNet capacity on tightly packed individual EQ band heatmaps unless later experiments justify it.
 
 ## 17. GeoNet80 exact architecture
@@ -941,7 +941,7 @@ python scripts/04_check_dataset.py --data data_v0
 - [ ] For component `k`, compute `h = y1 - y0`.
 - [ ] Compute `grid_x = cx * 192`.
 - [ ] Compute `grid_y = cy * 320`.
-- [ ] Heatmap has 80 channels.
+- [x] Heatmap has 80 channels.
 - [ ] Draw Gaussian center with radius `2` cells for visible components.
 - [ ] Store `wh[k] = [w, h]` at center location.
 - [ ] Store `offset[k] = [grid_x - floor(grid_x), grid_y - floor(grid_y)]` at center location.
@@ -950,22 +950,22 @@ python scripts/04_check_dataset.py --data data_v0
 - [ ] Exclude EQ band classes 30-39 from both positive and negative heatmap loss when `--train-eq-band-heatmaps=false`.
 - [ ] Use state vector as direct regression target.
 - [ ] Use this state-to-anchor map for local feature sampling: state 0 -> `main_transport_row`; 1 -> `main_volume_block`; 2 -> `main_balance_block`; 3 -> `main_posbar`; 4 -> `main_shuffle_button`; 5 -> `main_repeat_button`; 6 -> `eq_on_auto_block`; 7 -> `eq_on_auto_block`; 8 -> `eq_preamp_slider`; 9-18 -> derived/predicted EQ band rects 30-39; 19 -> `playlist_scrollbar_track`; 20 -> `playlist_text_area`; 21-22 -> `main_window`; 23-24 -> `eq_window`; 25-26 -> `playlist_window`; 27-31 -> `main_window`.
-- [ ] Implement one shared function `derive_eq_band_rects(eq_sliders_group_rect)` used in both training and inference.
-- [ ] `derive_eq_band_rects` must split the group rect into 10 equal-width horizontal subdivisions.
-- [ ] `derive_eq_band_rects` must use the full vertical extent of `eq_sliders_group_rect`.
-- [ ] `derive_eq_band_rects` must apply no expansion, no padding, and no hidden magic constants.
+- [x] Implement one shared function `derive_eq_band_rects(eq_sliders_group_rect)` used in both training and inference.
+- [x] `derive_eq_band_rects` must split the group rect into 10 equal-width horizontal subdivisions.
+- [x] `derive_eq_band_rects` must use the full vertical extent of `eq_sliders_group_rect`.
+- [x] `derive_eq_band_rects` must apply no expansion, no padding, and no hidden magic constants.
 - [ ] For band `i` in `0..9`, compute `x0_i = x0 + (x1 - x0) * i / 10` and `x1_i = x0 + (x1 - x0) * (i + 1) / 10`; use original `y0,y1`.
 - [ ] If a state anchor is invisible or missing, feed zero feature plus anchor rect `[0,0,0,0,0]` for that state.
 
 ## 19. GeoNet80 loss
 
-- [ ] Implement CenterNet focal heatmap loss.
+- [x] Implement CenterNet focal heatmap loss.
 - [ ] Positive heatmap term: `-((1 - p) ** 2) * log(p)`.
 - [ ] Negative heatmap term: `-((1 - y) ** 4) * (p ** 2) * log(1 - p)`.
 - [ ] Normalize heatmap loss by number of visible components.
-- [ ] Implement smooth L1 loss for width/height at target centers.
-- [ ] Implement smooth L1 loss for offsets at target centers.
-- [ ] Implement smooth L1 loss for state vector.
+- [x] Implement smooth L1 loss for width/height at target centers.
+- [x] Implement smooth L1 loss for offsets at target centers.
+- [x] Implement smooth L1 loss for state vector.
 - [ ] Use `L_geonet = 1.0 * center_focal_loss + 5.0 * smooth_l1_wh + 2.0 * smooth_l1_offset + 1.0 * smooth_l1_state`.
 
 ## 20. GeoNet80 training augmentation
@@ -994,23 +994,23 @@ python scripts/04_check_dataset.py --data data_v0
 
 ## 21. GeoNet80 training script
 
-- [ ] Implement `train_geonet.py`.
-- [ ] Use AdamW optimizer.
-- [ ] Use learning rate `2e-4`.
-- [ ] Use weight decay `1e-4`.
+- [x] Implement `train_geonet.py`.
+- [x] Use AdamW optimizer.
+- [x] Use learning rate `2e-4`.
+- [x] Use weight decay `1e-4`.
 - [ ] Use cosine decay scheduler with 5% warmup.
 - [ ] Use AMP/mixed precision.
-- [ ] Use gradient clipping with `max_norm = 1.0`.
+- [x] Use gradient clipping with `max_norm = 1.0`.
 - [ ] Default batch size `4`.
 - [ ] Allow batch size `8` if RTX 4090 memory allows.
 - [ ] If GeoNet OOMs at batch `4`, use micro-batch `2` with `--grad-accum-steps 2` to keep effective batch `4`.
 - [ ] Do not silently reduce effective batch below `4` without logging it in `config.yaml`.
 - [ ] Train default `80` epochs.
 - [ ] Save checkpoint every epoch.
-- [ ] Save `last.safetensors`.
-- [ ] Save `best.safetensors`.
-- [ ] Save `config.yaml`.
-- [ ] Save `metrics.jsonl`.
+- [x] Save `last.safetensors`.
+- [x] Save `best.safetensors`.
+- [x] Save `config.yaml`.
+- [x] Save `metrics.jsonl`.
 - [ ] Save visual rect overlay debug grids every validation epoch.
 
 Training command:
@@ -1045,16 +1045,16 @@ python train_geonet.py \
 
 ## 23. Model 2: SlotNetV1 task
 
-- [ ] Implement `models/slotnet_v1.py`.
-- [ ] SlotNet input includes full view image.
-- [ ] SlotNet input includes rects `[B, 80, 5]`.
-- [ ] SlotNet input includes state vector `[B, 32]`.
-- [ ] SlotNet input includes `slot_id`.
-- [ ] SlotNet crops source view region for the selected slot using rects.
-- [ ] SlotNet output is one slot bitmap, not the full atlas at once.
-- [ ] SlotNet output shape is `[B, 7, slot_h, slot_w]`.
-- [ ] Output channels `0..2` are RGB via sigmoid.
-- [ ] Output channels `3..6` are special logits.
+- [x] Implement `models/slotnet_v1.py`.
+- [x] SlotNet input includes full view image.
+- [x] SlotNet input includes rects `[B, 80, 5]`.
+- [x] SlotNet input includes state vector `[B, 32]`.
+- [x] SlotNet input includes `slot_id`.
+- [x] SlotNet crops source view region for the selected slot using rects.
+- [x] SlotNet output is one slot bitmap, not the full atlas at once.
+- [x] SlotNet output shape is `[B, 7, slot_h, slot_w]`.
+- [x] Output channels `0..2` are RGB via sigmoid.
+- [x] Output channels `3..6` are special logits.
 - [ ] Special class `0` means normal RGB.
 - [ ] Special class `1` means forced magenta.
 - [ ] Special class `2` means forced black.
@@ -1066,18 +1066,18 @@ python train_geonet.py \
 
 ## 24. Slot source mapping
 
-- [ ] Create `configs/slot_sources_v1.json`.
-- [ ] Map `MAIN` source to `main_window`, expand `0.00`.
-- [ ] Map `TITLEBAR` source to `union(main_titlebar, main_window_buttons)`, expand `0.08`.
-- [ ] Map `CBUTTONS` source to `main_transport_row`, expand `0.12`.
-- [ ] Map `SHUFREP` source to `union(main_shuffle_button, main_repeat_button, main_eq_toggle, main_pl_toggle)`, expand `0.12`.
-- [ ] Map `MONOSTER` source to `main_mono_stereo`, expand `0.12`.
-- [ ] Map `PLAYPAUS` source to `main_playpause_indicator`, expand `0.12`.
-- [ ] Map `EQMAIN` source to `eq_window`, expand `0.00`.
-- [ ] Map `PLEDIT` source to `playlist_window`, expand `0.00`.
-- [ ] Map `POSBAR` source to `main_posbar`, expand `0.12`.
-- [ ] Map `VOLUME` source to `main_volume_block`, expand `0.12`.
-- [ ] Map `BALANCE` source to `main_balance_block`, expand `0.12`.
+- [x] Create `configs/slot_sources_v1.json`.
+- [x] Map `MAIN` source to `main_window`, expand `0.00`.
+- [x] Map `TITLEBAR` source to `union(main_titlebar, main_window_buttons)`, expand `0.08`.
+- [x] Map `CBUTTONS` source to `main_transport_row`, expand `0.12`.
+- [x] Map `SHUFREP` source to `union(main_shuffle_button, main_repeat_button, main_eq_toggle, main_pl_toggle)`, expand `0.12`.
+- [x] Map `MONOSTER` source to `main_mono_stereo`, expand `0.12`.
+- [x] Map `PLAYPAUS` source to `main_playpause_indicator`, expand `0.12`.
+- [x] Map `EQMAIN` source to `eq_window`, expand `0.00`.
+- [x] Map `PLEDIT` source to `playlist_window`, expand `0.00`.
+- [x] Map `POSBAR` source to `main_posbar`, expand `0.12`.
+- [x] Map `VOLUME` source to `main_volume_block`, expand `0.12`.
+- [x] Map `BALANCE` source to `main_balance_block`, expand `0.12`.
 - [ ] If a source rect is missing, fall back to its parent window rect.
 - [ ] If parent window rect is also missing, use zero crop and disable slot loss for that sample.
 - [ ] `union(...)` means bounding rectangle around listed visible component rects, expanded by the configured fraction.
@@ -1105,11 +1105,11 @@ python train_geonet.py \
 
 ## 26. Slot crop operation
 
-- [ ] Implement `models/crop.py`.
-- [ ] Use `torch.nn.functional.grid_sample`.
-- [ ] For each sample and slot, crop source view over source rect.
-- [ ] Crop output size equals slot capacity size in `(H, W)` order.
-- [ ] Add tests for H/W ordering to prevent width-height swaps.
+- [x] Implement `models/crop.py`.
+- [x] Use `torch.nn.functional.grid_sample`.
+- [x] For each sample and slot, crop source view over source rect.
+- [x] Crop output size equals slot capacity size in `(H, W)` order.
+- [x] Add tests for H/W ordering to prevent width-height swaps.
 - [ ] `MAIN` crop output size is `128x320`.
 - [ ] `TITLEBAR` crop output size is `96x320`.
 - [ ] `CBUTTONS` crop output size is `64x160`.
@@ -1121,15 +1121,15 @@ python train_geonet.py \
 - [ ] `POSBAR` crop output size is `32x320`.
 - [ ] `VOLUME` crop output size is `448x96`.
 - [ ] `BALANCE` crop output size is `448x80`.
-- [ ] Crop tensor shape is `B x 3 x slot_h x slot_w`.
+- [x] Crop tensor shape is `B x 3 x slot_h x slot_w`.
 - [ ] Compute source crop size in input-render pixels before resizing: `render_w = (x1 - x0) * INPUT_W`, `render_h = (y1 - y0) * INPUT_H`.
 - [ ] Compute raw SlotNet scale ratios: `scale_x = render_w / slot_w`, `scale_y = render_h / slot_h`.
-- [ ] Convert to log-ratio conditioning values: `log_scale_x = log(max(scale_x, 1e-6))`, `log_scale_y = log(max(scale_y, 1e-6))`.
-- [ ] Use log-ratios as SlotNet input channels, not raw scale ratios.
+- [x] Convert to log-ratio conditioning values: `log_scale_x = log(max(scale_x, 1e-6))`, `log_scale_y = log(max(scale_y, 1e-6))`.
+- [x] Use log-ratios as SlotNet input channels, not raw scale ratios.
 - [ ] If rect visibility is zero, set `log_scale_x = 0` and `log_scale_y = 0` and mark the slot loss disabled for that sample if no fallback rect exists.
-- [ ] Use `align_corners=False` unless tests show a reason to change.
-- [ ] Add unit test for rect-to-grid conversion.
-- [ ] Add unit test that an identity/full-image rect crop matches expected resized image.
+- [x] Use `align_corners=False` unless tests show a reason to change.
+- [x] Add unit test for rect-to-grid conversion.
+- [x] Add unit test that an identity/full-image rect crop matches expected resized image.
 
 ## 27. SlotNet input channels
 
@@ -1217,40 +1217,40 @@ python train_geonet.py \
 
 ## 29. SlotNet target and masks
 
-- [ ] Implement `models/atlas.py`.
-- [ ] Load target atlas PNG.
-- [ ] Load target atlas mask PNG.
-- [ ] Load visible atlas mask PNG for the sample.
-- [ ] Crop target slot from target atlas using `atlas_v1.json` slot rectangle.
-- [ ] Crop atlas mask from atlas mask using same slot rectangle.
-- [ ] Crop visible atlas mask from visible mask using same slot rectangle.
-- [ ] Load per-skin slot weight vector from `.slot_weight.f32`.
-- [ ] Compute slot weight as `atlas_v1 slot loss_weight * per_skin_slot_weight[slot_id]`.
-- [ ] Normalize RGB targets to `[0,1]`.
-- [ ] Normalize masks to `[0,1]`.
-- [ ] Compute `effective_mask = atlas_mask_slot * (0.25 + 0.75 * visible_slot)`.
-- [ ] Read `configs/magenta_policy.json` using schema `{ "default": false, "per_slot": { ... } }`.
-- [ ] For current slot, compute `magenta_enabled_for_slot = per_slot.get(slot_name, default)`.
-- [ ] If `magenta_enabled_for_slot` is true, set magenta special target class `1` where target RGB is exactly `[255, 0, 255]`.
-- [ ] If `magenta_enabled_for_slot` is false, set all special targets to class `0` and set special loss weight to `0` for that slot.
-- [ ] Set class `0` normal RGB elsewhere inside atlas mask.
-- [ ] Ignore special loss where atlas mask is `0`.
+- [x] Implement `models/atlas.py`.
+- [x] Load target atlas PNG.
+- [x] Load target atlas mask PNG.
+- [x] Load visible atlas mask PNG for the sample.
+- [x] Crop target slot from target atlas using `atlas_v1.json` slot rectangle.
+- [x] Crop atlas mask from atlas mask using same slot rectangle.
+- [x] Crop visible atlas mask from visible mask using same slot rectangle.
+- [x] Load per-skin slot weight vector from `.slot_weight.f32`.
+- [x] Compute slot weight as `atlas_v1 slot loss_weight * per_skin_slot_weight[slot_id]`.
+- [x] Normalize RGB targets to `[0,1]`.
+- [x] Normalize masks to `[0,1]`.
+- [x] Compute `effective_mask = atlas_mask_slot * (0.25 + 0.75 * visible_slot)`.
+- [x] Read `configs/magenta_policy.json` using schema `{ "default": false, "per_slot": { ... } }`.
+- [x] For current slot, compute `magenta_enabled_for_slot = per_slot.get(slot_name, default)`.
+- [x] If `magenta_enabled_for_slot` is true, set magenta special target class `1` where target RGB is exactly `[255, 0, 255]`.
+- [x] If `magenta_enabled_for_slot` is false, set all special targets to class `0` and set special loss weight to `0` for that slot.
+- [x] Set class `0` normal RGB elsewhere inside atlas mask.
+- [x] Ignore special loss where atlas mask is `0`.
 
 ## 30. SlotNet loss
 
-- [ ] Implement `models/losses.py`.
-- [ ] Implement RGB L1 loss with effective mask.
-- [ ] Implement Sobel edge loss with effective mask.
-- [ ] Implement special magenta cross-entropy loss inside atlas mask only if magenta policy is enabled.
-- [ ] Do not use GAN loss in V0.
-- [ ] Do not use VGG/perceptual loss in default V0.
+- [x] Implement `models/losses.py`.
+- [x] Implement RGB L1 loss with effective mask.
+- [x] Implement Sobel edge loss with effective mask.
+- [x] Implement special magenta cross-entropy loss inside atlas mask only if magenta policy is enabled.
+- [x] Do not use GAN loss in V0.
+- [x] Do not use VGG/perceptual loss in default V0.
 - [ ] Compute SSIM as a validation/debug metric if easy, but do not make it a blocking V0 training loss.
 - [ ] Do not compute RGB/Sobel losses with a flat `.mean()` over the whole padded slot tensor.
-- [ ] Use mask-sum normalization for RGB: `L_rgb = sum(abs(pred_rgb - target_rgb) * effective_mask) / (sum(effective_mask) * 3 + 1e-8)`.
-- [ ] Use mask-sum normalization for Sobel: `L_sobel = sum(abs(sobel(pred_rgb) - sobel(target_rgb)) * effective_mask) / (sum(effective_mask) * sobel_channels + 1e-8)`.
-- [ ] Ensure a sparse slot with large padding produces the same gradient scale per active pixel as a dense slot.
-- [ ] Use `L_special = cross_entropy(special_logits, special_target)` only where atlas mask is active.
-- [ ] Use default `L_slot = slot_weight * (1.00 * L_rgb + 0.50 * L_sobel + 1.00 * L_special_magenta_if_enabled)`.
+- [x] Use mask-sum normalization for RGB: `L_rgb = sum(abs(pred_rgb - target_rgb) * effective_mask) / (sum(effective_mask) * 3 + 1e-8)`.
+- [x] Use mask-sum normalization for Sobel: `L_sobel = sum(abs(sobel(pred_rgb) - sobel(target_rgb)) * effective_mask) / (sum(effective_mask) * sobel_channels + 1e-8)`.
+- [x] Ensure a sparse slot with large padding produces the same gradient scale per active pixel as a dense slot.
+- [x] Use `L_special = cross_entropy(special_logits, special_target)` only where atlas mask is active.
+- [x] Use default `L_slot = slot_weight * (1.00 * L_rgb + 0.50 * L_sobel + 1.00 * L_special_magenta_if_enabled)`.
 - [ ] If smoke outputs are noisy/over-sharpened, lower `--sobel-weight` to `0.25`.
 - [ ] If smoke outputs are blurry, raise `--sobel-weight` to `1.00` before adding any perceptual/GAN loss.
 - [ ] Do not train slots whose effective slot weight is zero.
@@ -1303,20 +1303,20 @@ python train_geonet.py \
 
 ## 33. SlotNet training script
 
-- [ ] Implement `train_slotnet.py`.
-- [ ] Use AdamW optimizer.
-- [ ] Use Stage A learning rate `1e-4`.
+- [x] Implement `train_slotnet.py`.
+- [x] Use AdamW optimizer.
+- [x] Use Stage A learning rate `1e-4`.
 - [ ] Use Stage B learning rate `5e-5`.
-- [ ] Use weight decay `1e-4`.
+- [x] Use weight decay `1e-4`.
 - [ ] Use cosine decay scheduler with 5% warmup.
 - [ ] Use AMP/mixed precision.
-- [ ] Use gradient clipping with `max_norm = 1.0`.
+- [x] Use gradient clipping with `max_norm = 1.0`.
 - [ ] If a slot OOMs at its default batch size, halve micro-batch and set `--grad-accum-steps 2` before reducing effective batch.
 - [ ] Save checkpoint every `5000` steps.
-- [ ] Save `last.safetensors`.
-- [ ] Save `best.safetensors`.
-- [ ] Save `config.yaml`.
-- [ ] Save `metrics.jsonl`.
+- [x] Save `last.safetensors`.
+- [x] Save `best.safetensors`.
+- [x] Save `config.yaml`.
+- [x] Save `metrics.jsonl`.
 - [ ] Save debug grids every `1000` training steps.
 - [ ] Train Stage A with ground-truth rects plus jitter.
 - [ ] Train Stage B with mixed ground-truth and frozen GeoNet-predicted rects plus jitter.
@@ -1442,22 +1442,22 @@ out_skin/skin.wsz
 
 ## 36. Atlas export helper
 
-- [ ] Implement `scripts/05_export_atlas_to_skin.py`.
-- [ ] Input is `atlas.png`.
-- [ ] Input is `configs/atlas_v1.json`.
-- [ ] Input is `configs/export_profile_classic.json`.
-- [ ] Input is `assets/default_skin/`.
-- [ ] Crop each active slot to exact export dimensions.
-- [ ] Save BMP files.
-- [ ] Fill ignored/default files from default skin.
-- [ ] Save text config files.
-- [ ] Zip final skin as `.wsz`.
-- [ ] Unit-test exported file sizes.
+- [x] Implement `scripts/05_export_atlas_to_skin.py`.
+- [x] Input is `atlas.png`.
+- [x] Input is `configs/atlas_v1.json`.
+- [x] Input is `configs/export_profile_classic.json`.
+- [x] Input is `assets/default_skin/`.
+- [x] Crop each active slot to exact export dimensions.
+- [x] Save BMP files.
+- [x] Fill ignored/default files from default skin.
+- [x] Save text config files.
+- [x] Zip final skin as `.wsz`.
+- [x] Unit-test exported file sizes.
 - [ ] Unit-test exported skin loads in Cranamp smoke test if CLI supports it.
 
 ## 37. Evaluation pipeline
 
-- [ ] Implement `eval_pipeline.py`.
+- [x] Implement `eval_pipeline.py`.
 - [ ] Run full pipeline on test split.
 - [ ] Use GeoNet predicted rects, not ground-truth rects, in full-pipeline evaluation.
 - [ ] Run SlotNet on predicted rects.
@@ -1639,27 +1639,27 @@ torch.use_deterministic_algorithms(True)
 
 ## 41. Unit tests
 
-- [ ] `test_atlas_pack.py` verifies BMP packing positions.
-- [ ] `test_atlas_pack.py` verifies atlas shape `1024x1024x3`.
-- [ ] `test_atlas_pack.py` verifies atlas mask values.
-- [ ] `test_rect_encoding.py` verifies normalized rect encoding and clipping.
-- [ ] `test_rect_encoding.py` verifies invisible rect zeroing.
+- [x] `test_atlas_pack.py` verifies BMP packing positions.
+- [x] `test_atlas_pack.py` verifies atlas shape `1024x1024x3`.
+- [x] `test_atlas_pack.py` verifies atlas mask values.
+- [x] `test_rect_encoding.py` verifies normalized rect encoding and clipping.
+- [x] `test_rect_encoding.py` verifies invisible rect zeroing.
 - [x] `test_rect_encoding.py` verifies deterministic `derive_eq_band_rects` output for fixed inputs.
-- [ ] `test_rect_encoding.py` verifies EQ band derivation is byte-identical for training and inference helper calls.
-- [ ] `test_slot_crop.py` verifies grid_sample crop dimensions.
-- [ ] `test_slot_crop.py` verifies full-image crop behavior.
-- [ ] `test_slot_crop.py` verifies jittered rect clipping.
-- [ ] `test_slot_crop.py` verifies log-scale-ratio channel values for known rect/slot sizes.
-- [ ] `test_geonet_state.py` verifies state-anchor 3x3 average-pool sampling.
-- [ ] `test_geonet_state.py` verifies state-anchor jitter is active only during training.
-- [ ] `test_visible_atlas_mask.py` verifies u32 provenance ID encode/decode.
-- [ ] `test_magenta_policy.py` verifies per-slot magenta policy lookup and default fallback.
-- [ ] `test_state_regions.py` verifies state-region rectangles are inside slot capacity rectangles.
+- [x] `test_rect_encoding.py` verifies EQ band derivation is byte-identical for training and inference helper calls.
+- [x] `test_slot_crop.py` verifies grid_sample crop dimensions.
+- [x] `test_slot_crop.py` verifies full-image crop behavior.
+- [x] `test_slot_crop.py` verifies jittered rect clipping.
+- [x] `test_slot_crop.py` verifies log-scale-ratio channel values for known rect/slot sizes.
+- [x] `test_geonet_state.py` verifies state-anchor 3x3 average-pool sampling.
+- [x] `test_geonet_state.py` verifies state-anchor jitter is active only during training.
+- [x] `test_visible_atlas_mask.py` verifies u32 provenance ID encode/decode.
+- [x] `test_magenta_policy.py` verifies per-slot magenta policy lookup and default fallback.
+- [x] `test_state_regions.py` verifies state-region rectangles are inside slot capacity rectangles.
 - [ ] `test_state_regions.py` verifies every non-empty state-bearing slot can compute normal/pressed/hidden metrics without guessing rectangles.
-- [ ] `test_mask_normalized_loss.py` verifies RGB/Sobel loss uses mask-sum normalization and is invariant to padding area.
-- [ ] `test_export_skin.py` verifies exported BMP dimensions match export profile.
-- [ ] `test_export_skin.py` verifies ignored/default files are created.
-- [ ] `test_export_skin.py` verifies `.wsz` zip is created.
+- [x] `test_mask_normalized_loss.py` verifies RGB/Sobel loss uses mask-sum normalization and is invariant to padding area.
+- [x] `test_export_skin.py` verifies exported BMP dimensions match export profile.
+- [x] `test_export_skin.py` verifies ignored/default files are created.
+- [x] `test_export_skin.py` verifies `.wsz` zip is created.
 
 ## 42. GPU rental and local usage
 
@@ -1698,48 +1698,48 @@ First serious V0: one 24-48 hour rental should be enough
 
 ## 43. Implementation order for the single coding agent
 
-- [ ] Step 1: Create repo structure and config stubs.
-- [ ] Step 2: Create `requirements.txt`.
-- [ ] Step 3: Create `configs/atlas_v1.json`.
-- [ ] Step 4: Create `configs/components_v1.json`.
-- [ ] Step 5: Create `configs/slot_sources_v1.json`.
-- [ ] Step 6: Create placeholder `configs/export_profile_classic.json`.
-- [ ] Step 7: Inspect user-provided Cranamp repo.
+- [x] Step 1: Create repo structure and config stubs.
+- [x] Step 2: Create `requirements.txt`.
+- [x] Step 3: Create `configs/atlas_v1.json`.
+- [x] Step 4: Create `configs/components_v1.json`.
+- [x] Step 5: Create `configs/slot_sources_v1.json`.
+- [x] Step 6: Create placeholder `configs/export_profile_classic.json`.
+- [x] Step 7: Inspect user-provided Cranamp repo.
 - [x] Step 8: Implement or wrap `cranamp-cli dump-classic-spec`.
 - [x] Step 9: Implement or wrap `cranamp-cli render-random`.
 - [x] Step 10: Implement or wrap `cranamp-cli render-with-params`.
-- [ ] Step 11: Ensure Cranamp CLI outputs `view.png`, `rects.f32`, `state.f32`, `visible_atlas_mask.png`, and `params.json`.
-- [ ] Step 12: Implement `scripts/00_scan_skins.py`.
-- [ ] Step 13: Implement `scripts/01_pack_skins.py`.
-- [ ] Step 14: Support `.wsz` and folder skins.
-- [ ] Step 15: Support case-insensitive filenames.
-- [ ] Step 16: Use default assets for missing optional BMPs.
-- [ ] Step 17: Write atlas, mask, slot weights, metadata, and valid skins CSV.
+- [x] Step 11: Ensure Cranamp CLI outputs `view.png`, `rects.f32`, `state.f32`, `visible_atlas_mask.png`, and `params.json`.
+- [x] Step 12: Implement `scripts/00_scan_skins.py`.
+- [x] Step 13: Implement `scripts/01_pack_skins.py`.
+- [x] Step 14: Support `.wsz` and folder skins.
+- [x] Step 15: Support case-insensitive filenames.
+- [x] Step 16: Use default assets for missing optional BMPs.
+- [x] Step 17: Write atlas, mask, slot weights, metadata, and valid skins CSV.
 - [x] Step 18: Implement `scripts/02_render_dataset.py`.
 - [x] Step 19: Implement deterministic seeds.
-- [ ] Step 20: Render saved offline dataset.
-- [ ] Step 21: Implement `scripts/03_make_splits.py`.
-- [ ] Step 22: Implement `scripts/04_check_dataset.py`.
-- [ ] Step 23: Implement debug contact sheets.
-- [ ] Step 24: Implement `models/geonet80.py`.
-- [ ] Step 25: Implement CenterNet label builder.
-- [ ] Step 26: Implement GeoNet losses.
-- [ ] Step 27: Implement `train_geonet.py`.
-- [ ] Step 28: Implement GeoNet inference rect decoding.
+- [x] Step 20: Render saved offline dataset.
+- [x] Step 21: Implement `scripts/03_make_splits.py`.
+- [x] Step 22: Implement `scripts/04_check_dataset.py`.
+- [x] Step 23: Implement debug contact sheets.
+- [x] Step 24: Implement `models/geonet80.py`.
+- [x] Step 25: Implement CenterNet label builder.
+- [x] Step 26: Implement GeoNet losses.
+- [x] Step 27: Implement `train_geonet.py`.
+- [x] Step 28: Implement GeoNet inference rect decoding.
 - [ ] Step 29: Implement GeoNet debug overlay.
-- [ ] Step 30: Implement `models/crop.py`.
-- [ ] Step 31: Implement `models/atlas.py`.
-- [ ] Step 32: Implement `models/losses.py`.
-- [ ] Step 33: Implement `models/slotnet_v1.py`.
-- [ ] Step 34: Implement SlotNet rect jitter.
+- [x] Step 30: Implement `models/crop.py`.
+- [x] Step 31: Implement `models/atlas.py`.
+- [x] Step 32: Implement `models/losses.py`.
+- [x] Step 33: Implement `models/slotnet_v1.py`.
+- [x] Step 34: Implement SlotNet rect jitter.
 - [ ] Step 35: Implement SlotNet grouped-by-slot batching.
 - [ ] Step 36: Implement SlotNet Stage A training.
 - [ ] Step 37: Implement SlotNet Stage B mixed GT/predicted rect training.
 - [ ] Step 38: Implement SlotNet debug grids.
-- [ ] Step 39: Implement `scripts/05_export_atlas_to_skin.py`.
+- [x] Step 39: Implement `scripts/05_export_atlas_to_skin.py`.
 - [ ] Step 40: Implement `infer_skin.py`.
-- [ ] Step 41: Implement `eval_pipeline.py`.
-- [ ] Step 42: Implement unit tests.
+- [x] Step 41: Implement `eval_pipeline.py`.
+- [x] Step 42: Implement unit tests.
 - [ ] Step 43: Run Smoke dataset and training.
 - [ ] Step 44: Fix Smoke failures.
 - [ ] Step 45: Run V0 dataset and training.

@@ -47,6 +47,22 @@ python scripts/05_export_atlas_to_skin.py \
   --out out_skin
 ```
 
+## One-Skin Smoke Path
+
+This runs everything that can execute before a large skin corpus exists:
+
+```bash
+python scripts/01_pack_skins.py --skins-raw assets --out /tmp/uigen_data_v0
+python scripts/02_render_dataset.py --valid-skins /tmp/uigen_data_v0/valid_skins.csv --out /tmp/uigen_data_v0 --variants 2 --cranamp-cli ./cranamp_cli/cranamp-cli
+python scripts/03_make_splits.py --data /tmp/uigen_data_v0 --valid-skins /tmp/uigen_data_v0/valid_skins.csv
+python scripts/04_check_dataset.py --data /tmp/uigen_data_v0 --debug-out /tmp/uigen_data_v0/debug/contact.png
+python train_geonet.py --train /tmp/uigen_data_v0/train.csv --max-steps 1 --base-channels 4 --fpn-channels 8 --out /tmp/uigen_runs/geonet --device cpu
+python train_slotnet.py --train /tmp/uigen_data_v0/train.csv --slot PLAYPAUS --steps 1 --out /tmp/uigen_runs/slotnet --device cpu
+python eval_pipeline.py --samples /tmp/uigen_data_v0/train.csv --out /tmp/uigen_eval --limit 1
+```
+
+The output is only a pipeline smoke test. Real quality is blocked on many skins and GPU training.
+
 ## Cranamp
 
 The local Cranamp checkout used for inspection is expected at:
