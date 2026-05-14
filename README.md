@@ -55,4 +55,13 @@ The local Cranamp checkout used for inspection is expected at:
 export CRANAMP_REPO=/home/s/develop/projects/cranamp
 ```
 
-Renderer-driven dataset generation still depends on adding or wrapping `cranamp-cli`; see `cranamp_cli/README.md`.
+Renderer-driven dataset generation is available through:
+
+```bash
+./cranamp_cli/cranamp-cli render-random --help
+```
+
+The current renderer is the first deterministic CLI compositor in the copied
+Cranamp fork. It emits views, rect labels, state labels, params, and visible
+atlas masks; deeper parity with the interactive Cranamp renderer is tracked in
+the roadmap.

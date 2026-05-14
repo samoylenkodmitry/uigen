@@ -52,7 +52,7 @@
 - [ ] Keep V0 architecture unchanged; only add implementation hardening items from final review.
 - [ ] Use mask-sum-normalized RGB/Sobel losses, not flat tensor means, so sparse/padded slots train at the same active-pixel gradient scale as dense slots.
 - [ ] Add `configs/state_regions_v1.json` so pressed/normal/hidden-state metrics are not guessed by the agent.
-- [ ] Expose `--state-balanced` in the Cranamp CLI and dataset script, but keep it disabled by default.
+- [x] Expose `--state-balanced` in the Cranamp CLI and dataset script, but keep it disabled by default.
 - [ ] Change SlotNet scale conditioning from raw ratios to log-ratios: `log_scale_x = log(max(scale_x, 1e-6))`, `log_scale_y = log(max(scale_y, 1e-6))`.
 - [ ] Cap GeoNet state-anchor jitter by component size: no more than ±2 stride-4 cells and no more than ±25% of the anchor width/height in grid cells.
 - [ ] Add a numeric rare-state failure trigger: if `pressed_state_rgb_mae > 1.5 * normal_state_rgb_mae` for any state-bearing slot, regenerate with `--variants 32 --state-balanced`.
@@ -95,11 +95,11 @@
 - [ ] Create `cranamp_cli/README.md` documenting how to point to the user’s Cranamp repo.
 - [ ] Create `scripts/00_scan_skins.py`.
 - [ ] Create `scripts/01_pack_skins.py`.
-- [ ] Create `scripts/02_render_dataset.py`.
+- [x] Create `scripts/02_render_dataset.py`.
 - [ ] Create `scripts/03_make_splits.py`.
 - [ ] Create `scripts/04_check_dataset.py`.
 - [ ] Create `scripts/05_export_atlas_to_skin.py`.
-- [ ] Create `scripts/06_benchmark_cranamp.py`.
+- [x] Create `scripts/06_benchmark_cranamp.py`.
 - [ ] Create `scripts/07_verify_magenta.py`.
 - [ ] Create `scripts/08_pack_dataset_shards.py` as optional fallback if small-file I/O becomes a bottleneck.
 - [ ] Create `models/geonet80.py`.
@@ -188,24 +188,26 @@ skins_raw/
 
 ## 4. Cranamp fork/CLI
 
-- [ ] Fork or wrap the user’s Cranamp repo.
+- [x] Fork or wrap the user’s Cranamp repo.
 - [ ] If the repo path is not embedded, read it from environment variable `CRANAMP_REPO=/path/to/cranamp`.
-- [ ] Inspect Cranamp’s actual skin loader, renderer constants, fallback assets, and export dimensions.
+- [x] Inspect Cranamp’s actual skin loader, renderer constants, fallback assets, and export dimensions.
 - [ ] Do not guess exact BMP export dimensions from external sources.
 - [ ] Do not hardcode uncertain classic dimensions if Cranamp already defines them.
-- [ ] Add or expose a CLI executable named `cranamp-cli`.
-- [ ] Implement `cranamp-cli dump-classic-spec`.
-- [ ] Implement `cranamp-cli render-random`.
-- [ ] Implement `cranamp-cli render-with-params`.
-- [ ] Make all Cranamp randomization deterministic from seed.
-- [ ] Make the Cranamp CLI output exact rect labels in the normalized format defined below.
-- [ ] Make the Cranamp CLI output exact state labels in the fixed vector format defined below.
-- [ ] Make the Cranamp CLI output a visible-atlas mask for each render.
-- [ ] Make the Cranamp CLI output replayable `params.json` for each render.
-- [ ] Make `render-with-params` replay the exact render from `params.json` for validation/debug.
-- [ ] Add `--state-balanced true|false` to `render-random`; default is `false`.
-- [ ] In `--state-balanced true`, override normal Bernoulli/random state sampling to enumerate pressed and toggle states systematically across variants.
-- [ ] Keep `--state-balanced` deterministic from seed and variant index.
+- [x] Add or expose a CLI executable named `cranamp-cli`.
+- [x] Implement `cranamp-cli dump-classic-spec`.
+- [x] Implement `cranamp-cli render-random`.
+- [x] Implement `cranamp-cli render-with-params`.
+- [x] Make all Cranamp randomization deterministic from seed.
+- [x] Make the Cranamp CLI output exact rect labels in the normalized format defined below.
+- [x] Make the Cranamp CLI output exact state labels in the fixed vector format defined below.
+- [x] Make the Cranamp CLI output a visible-atlas mask for each render.
+- [x] Make the Cranamp CLI output replayable `params.json` for each render.
+- [x] Make `render-with-params` replay the exact render from `params.json` for validation/debug.
+- [x] Add `--state-balanced true|false` to `render-random`; default is `false`.
+- [x] In `--state-balanced true`, override normal Bernoulli/random state sampling to enumerate pressed and toggle states systematically across variants.
+- [x] Keep `--state-balanced` deterministic from seed and variant index.
+
+Implementation note: the first `cranamp-cli` is a deterministic compositor in the vendored Cranamp fork, using Cranamp sprite constants and skin decode behavior. It satisfies the dataset file contract now; direct instrumentation of the interactive Cranamp renderer and exact UI parity remain open below.
 
 Required CLI commands:
 
@@ -249,7 +251,7 @@ Cranamp renderer instrumentation tasks:
 - [ ] Track provenance through scaled draws, local component shifts, pressed-state sprite selection, slider frame selection, and playlist/EQ/main window drawing.
 - [ ] Do not approximate `visible_atlas_mask` with a whole-slot mask unless an explicit temporary fallback flag `--visible-mask-fallback whole-slot` is used for smoke testing.
 - [ ] Add a debug skin whose atlas pixels encode unique IDs/colors, render it, and verify `visible_atlas_mask` marks exactly the drawn source regions.
-- [ ] Add `scripts/06_benchmark_cranamp.py` to time `render-random` throughput for 100, 1000, and 8000 renders.
+- [x] Add `scripts/06_benchmark_cranamp.py` to time `render-random` throughput for 100, 1000, and 8000 renders.
 - [ ] Benchmark cold-start throughput and warmed parallel-process throughput separately.
 - [ ] If average render time exceeds `0.50 s/render`, make `scripts/02_render_dataset.py` run multiple Cranamp processes in parallel.
 - [ ] Log renders/second, failures, CPU utilization, and disk write throughput before generating V0/V1 datasets.
@@ -660,8 +662,8 @@ reserved:          1.0
 - [ ] Before generating V0/V1, run `scripts/06_benchmark_cranamp.py` and record render throughput.
 - [ ] Use multiple Cranamp worker processes if render throughput is slower than `0.50 s/render` or CPU has unused cores.
 - [ ] Do not generate views on the fly during model training.
-- [ ] Implement `scripts/02_render_dataset.py` to call `cranamp-cli render-random`.
-- [ ] Use deterministic seed per `(skin_id, variant_id)`.
+- [x] Implement `scripts/02_render_dataset.py` to call `cranamp-cli render-random`.
+- [x] Use deterministic seed per `(skin_id, variant_id)`.
 - [ ] Use `seed = stable_hash(skin_id) * 1000003 + variant_id`.
 - [ ] Save all generated files to disk.
 - [ ] Keep loose files for SMOKE/V0 unless dataloader profiling shows GPU starvation.
@@ -793,8 +795,8 @@ data_v0/params/{skin_id}_{variant_id}.json
 - [ ] Sample `playlist_scroll = Uniform(0.0, 1.0)`.
 - [ ] Sample `playlist_selected_row = RandomInt(0, 16)`.
 - [ ] Log state coverage counts per skin for pressed transport states, shuffle/repeat states, volume/balance/posbar positions, and EQ bands.
-- [ ] Implement optional `--state-balanced` mode but keep it disabled by default in V0.
-- [ ] Expose `--state-balanced` in both `cranamp-cli render-random` and `scripts/02_render_dataset.py`.
+- [x] Implement optional `--state-balanced` mode but keep it disabled by default in V0.
+- [x] Expose `--state-balanced` in both `cranamp-cli render-random` and `scripts/02_render_dataset.py`.
 - [ ] In `--state-balanced` mode, guarantee each transport pressed state including `-1` appears at least three times per skin when `--variants >= 32`.
 - [ ] In `--state-balanced` mode, enumerate shuffle/repeat/EQ/playlist toggle states across variants rather than sampling all toggles independently.
 - [ ] In `--state-balanced` mode, distribute volume/balance/posbar positions across low/mid/high buckets rather than pure uniform sampling.
@@ -1642,7 +1644,7 @@ torch.use_deterministic_algorithms(True)
 - [ ] `test_atlas_pack.py` verifies atlas mask values.
 - [ ] `test_rect_encoding.py` verifies normalized rect encoding and clipping.
 - [ ] `test_rect_encoding.py` verifies invisible rect zeroing.
-- [ ] `test_rect_encoding.py` verifies deterministic `derive_eq_band_rects` output for fixed inputs.
+- [x] `test_rect_encoding.py` verifies deterministic `derive_eq_band_rects` output for fixed inputs.
 - [ ] `test_rect_encoding.py` verifies EQ band derivation is byte-identical for training and inference helper calls.
 - [ ] `test_slot_crop.py` verifies grid_sample crop dimensions.
 - [ ] `test_slot_crop.py` verifies full-image crop behavior.
@@ -1703,9 +1705,9 @@ First serious V0: one 24-48 hour rental should be enough
 - [ ] Step 5: Create `configs/slot_sources_v1.json`.
 - [ ] Step 6: Create placeholder `configs/export_profile_classic.json`.
 - [ ] Step 7: Inspect user-provided Cranamp repo.
-- [ ] Step 8: Implement or wrap `cranamp-cli dump-classic-spec`.
-- [ ] Step 9: Implement or wrap `cranamp-cli render-random`.
-- [ ] Step 10: Implement or wrap `cranamp-cli render-with-params`.
+- [x] Step 8: Implement or wrap `cranamp-cli dump-classic-spec`.
+- [x] Step 9: Implement or wrap `cranamp-cli render-random`.
+- [x] Step 10: Implement or wrap `cranamp-cli render-with-params`.
 - [ ] Step 11: Ensure Cranamp CLI outputs `view.png`, `rects.f32`, `state.f32`, `visible_atlas_mask.png`, and `params.json`.
 - [ ] Step 12: Implement `scripts/00_scan_skins.py`.
 - [ ] Step 13: Implement `scripts/01_pack_skins.py`.
@@ -1713,8 +1715,8 @@ First serious V0: one 24-48 hour rental should be enough
 - [ ] Step 15: Support case-insensitive filenames.
 - [ ] Step 16: Use default assets for missing optional BMPs.
 - [ ] Step 17: Write atlas, mask, slot weights, metadata, and valid skins CSV.
-- [ ] Step 18: Implement `scripts/02_render_dataset.py`.
-- [ ] Step 19: Implement deterministic seeds.
+- [x] Step 18: Implement `scripts/02_render_dataset.py`.
+- [x] Step 19: Implement deterministic seeds.
 - [ ] Step 20: Render saved offline dataset.
 - [ ] Step 21: Implement `scripts/03_make_splits.py`.
 - [ ] Step 22: Implement `scripts/04_check_dataset.py`.

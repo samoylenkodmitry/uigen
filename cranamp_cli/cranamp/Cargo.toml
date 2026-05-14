@@ -1,0 +1,97 @@
+[package]
+name = "cranamp"
+version = "0.1.9"
+edition = "2021"
+description = "A Cranpose-powered Winamp-style multiplatform audio player."
+license = "Apache-2.0"
+repository = "https://github.com/samoylenkodmitry/cranamp"
+publish = false
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--all-features"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cranamp"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["renderer-wgpu", "desktop"]
+renderer-wgpu = ["cranpose/renderer-wgpu"]
+renderer-pixels = ["cranpose/renderer-pixels"]
+desktop = ["cranpose/desktop", "native-audio", "native-dialogs"]
+android = ["cranpose/android", "native-audio"]
+ios = ["cranpose/ios"]
+web = [
+    "cranpose/web",
+    "dep:console_error_panic_hook",
+    "dep:getrandom_03",
+    "dep:js-sys",
+    "dep:rfd",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:wasm-logger",
+    "dep:web-sys",
+]
+native-audio = ["dep:rodio", "dep:symphonia"]
+native-dialogs = ["dep:rfd", "dep:walkdir"]
+logging = ["dep:env_logger"]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+clone_on_copy = "deny"
+redundant_locals = "deny"
+
+[dependencies]
+anyhow = "1.0"
+cranpose = { version = "0.1.1", default-features = false }
+cranpose-core = "0.1.1"
+cranpose-foundation = "0.1.1"
+cranpose-ui = "0.1.1"
+cranpose-ui-graphics = "0.1.1"
+getrandom = { version = "0.4", features = ["wasm_js"] }
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
+log = "0.4"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "mp3", "flac", "vorbis", "wav", "mp4", "symphonia-all"], optional = true }
+symphonia = { version = "0.5.5", default-features = false, features = ["all-codecs", "all-formats"], optional = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
+env_logger = { version = "0.11", optional = true }
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
+walkdir = { version = "2.5", optional = true }
+x11rb = "0.13.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+jni = "0.22"
+
+[patch.crates-io]
+cranpose = { path = "vendor/cranpose" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = { version = "0.1", optional = true }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"], optional = true }
+js-sys = { version = "0.3", optional = true }
+rfd = { version = "0.17.2", default-features = false, optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+wasm-logger = { version = "0.2", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Blob",
+    "HtmlAudioElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlMediaElement",
+    "Storage",
+    "Url",
+    "Window",
+] }

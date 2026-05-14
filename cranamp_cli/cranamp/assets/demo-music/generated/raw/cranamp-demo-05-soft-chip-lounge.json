@@ -1,0 +1,26 @@
+{
+  "ace_step_source": "/home/s/develop/projects/musicgen/ACE-Step-1.5/gradio_outputs/cranamp-demo-raw/b6162497-be9a-6393-7579-d236ce8cca28.flac",
+  "bpm": null,
+  "duration": 90,
+  "extra_outputs": {
+    "lm_metadata": null,
+    "time_costs": {
+      "dit_diffusion_per_step_time_cost": 0.5205090045928955,
+      "dit_diffusion_time_cost": 4.164072036743164,
+      "dit_encoder_time_cost": 0.11066126823425293,
+      "dit_offload_time_cost": 1.6777288913726807,
+      "dit_total_time_cost": 10.037643432617188,
+      "dit_vae_decode_time_cost": 5.7629101276397705,
+      "pipeline_total_time": 10.037643432617188
+    }
+  },
+  "generation_mode": "text-to-music DiT-only",
+  "lyrics": "[Instrumental]",
+  "model": "ACE-Step 1.5 / acestep-v15-turbo",
+  "output_stem": "cranamp-demo-05-soft-chip-lounge",
+  "prompt": "soft chiptune lounge instrumental, cozy desktop software demo, warm square wave melody, gentle drums, original composition, no vocals, no samples, no artist reference, 90 seconds",
+  "raw_file": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-05-soft-chip-lounge.flac",
+  "reference_audio": null,
+  "seed": 610005,
+  "status_message": "Generation completed successfully!"
+}

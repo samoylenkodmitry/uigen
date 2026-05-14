@@ -1,0 +1,26 @@
+{
+  "ace_step_source": "/home/s/develop/projects/musicgen/ACE-Step-1.5/gradio_outputs/cranamp-demo-raw/4513c24f-af60-6a10-6b0e-ccca48924601.flac",
+  "bpm": null,
+  "duration": 90,
+  "extra_outputs": {
+    "lm_metadata": null,
+    "time_costs": {
+      "dit_diffusion_per_step_time_cost": 0.4582067131996155,
+      "dit_diffusion_time_cost": 3.665653705596924,
+      "dit_encoder_time_cost": 0.07282161712646484,
+      "dit_offload_time_cost": 1.7014517784118652,
+      "dit_total_time_cost": 8.908493518829346,
+      "dit_vae_decode_time_cost": 5.170018196105957,
+      "pipeline_total_time": 8.908493518829346
+    }
+  },
+  "generation_mode": "text-to-music DiT-only",
+  "lyrics": "[Instrumental]",
+  "model": "ACE-Step 1.5 / acestep-v15-turbo",
+  "output_stem": "cranamp-demo-02-neon-ambient",
+  "prompt": "cyberpunk ambient electronic instrumental, dark blue neon mood, slow beat, nostalgic software demo music, original composition, no vocals, no samples, no artist reference, 90 seconds",
+  "raw_file": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-02-neon-ambient.flac",
+  "reference_audio": null,
+  "seed": 610002,
+  "status_message": "Generation completed successfully!"
+}

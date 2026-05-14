@@ -1,0 +1,7 @@
+/target
+/dist
+/pkg
+/platform/android/.gradle
+/platform/android/build
+/platform/android/app/build
+/platform/android/target

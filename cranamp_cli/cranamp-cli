@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import runpy
+import sys
+
+repo_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(repo_root))
+runpy.run_path(str(Path(__file__).resolve().parent / "cranamp" / "tools" / "cranamp_cli.py"), run_name="__main__")

@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cranamp</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      background: #050608;
+      color: #e9edf0;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: #050608;
+    }
+
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+    }
+
+    .stage {
+      display: grid;
+      gap: 8px;
+      justify-items: end;
+    }
+
+    main {
+      width: 275px;
+      height: 493px;
+      background: #090b10;
+    }
+
+    .pip-button {
+      width: 34px;
+      height: 26px;
+      border: 1px solid #586372;
+      background: linear-gradient(#e7edf4, #8c9bad 50%, #d7e0ea);
+      box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 #425060;
+      cursor: pointer;
+    }
+
+    .pip-button:disabled {
+      cursor: default;
+      opacity: 0.42;
+    }
+
+    .pip-icon,
+    .pip-icon::after {
+      display: block;
+      border: 2px solid #192232;
+    }
+
+    .pip-icon {
+      width: 18px;
+      height: 13px;
+      margin: 4px auto 0;
+      position: relative;
+    }
+
+    .pip-icon::after {
+      content: "";
+      width: 7px;
+      height: 5px;
+      position: absolute;
+      right: 1px;
+      bottom: 1px;
+      background: #d7e0ea;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: #050608;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <button id="pip-button" class="pip-button" type="button" aria-label="Open floating Cranamp window" title="Open floating Cranamp window" disabled>
+      <span class="pip-icon" aria-hidden="true"></span>
+    </button>
+    <main id="cranamp-host">
+      <canvas id="cranamp-canvas" width="275" height="493"></canvas>
+    </main>
+  </div>
+
+  <script type="module">
+    import init, { run_app } from "./pkg/cranamp.js";
+
+    const DEFAULT_SURFACE_SIZE = { width: 275, height: 493 };
+    const host = document.getElementById("cranamp-host");
+    const canvas = document.getElementById("cranamp-canvas");
+    const pipButton = document.getElementById("pip-button");
+    let pipWindow = null;
+    let savedCanvasStyle = null;
+    let cranampSize = { ...DEFAULT_SURFACE_SIZE };
+    let lastPipWindowSize = null;
+    let openingPiP = false;
+    let autoFloatArmed = false;
+
+    function validSurfaceSize(size) {
+      const width = Number(size?.width);
+      const height = Number(size?.height);
+      if (!Number.isFinite(width) || !Number.isFinite(height)) {
+        return null;
+      }
+      return {
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+      };
+    }
+
+    function sameSurfaceSize(a, b) {
+      return a?.width === b?.width && a?.height === b?.height;
+    }
+
+    function measuredCanvasSize() {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        width: Math.max(1, Math.round(rect.width || canvas.clientWidth || cranampSize.width)),
+        height: Math.max(1, Math.round(rect.height || canvas.clientHeight || cranampSize.height)),
+      };
+    }
+
+    function applyCanvasSize(targetWindow = null, options = {}) {
+      const { resizeWindow = false } = options;
+      const { width, height } = cranampSize;
+
+      canvas.style.display = "block";
+      canvas.style.touchAction = "none";
+
+      if (!targetWindow || targetWindow.closed) {
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        host.style.width = `${width}px`;
+        host.style.height = `${height}px`;
+        return;
+      }
+
+      const doc = targetWindow.document;
+      const floatingHost = doc.getElementById("cranamp-pip-host");
+      doc.documentElement.style.minWidth = `${DEFAULT_SURFACE_SIZE.width}px`;
+      doc.documentElement.style.minHeight = `${DEFAULT_SURFACE_SIZE.height}px`;
+      doc.body.style.minWidth = `${DEFAULT_SURFACE_SIZE.width}px`;
+      doc.body.style.minHeight = `${DEFAULT_SURFACE_SIZE.height}px`;
+      canvas.style.width = "100vw";
+      canvas.style.height = "100vh";
+      if (floatingHost) {
+        floatingHost.style.width = "100vw";
+        floatingHost.style.height = "100vh";
+      }
+      if (resizeWindow && !sameSurfaceSize(lastPipWindowSize, cranampSize)) {
+        lastPipWindowSize = { ...cranampSize };
+        try {
+          targetWindow.resizeTo(width, height);
+        } catch (error) {
+          console.debug("Floating Cranamp resize was ignored by the browser", error);
+        }
+      }
+    }
+
+    function restoreCranampCanvas() {
+      if (canvas.parentElement !== host) {
+        host.appendChild(canvas);
+      }
+      if (savedCanvasStyle === null) {
+        canvas.removeAttribute("style");
+      } else {
+        canvas.setAttribute("style", savedCanvasStyle);
+      }
+      savedCanvasStyle = null;
+      pipWindow = null;
+      lastPipWindowSize = null;
+      applyCanvasSize();
+      enablePiPButton();
+    }
+
+    function forwardKeyboardEvent(event) {
+      document.dispatchEvent(new KeyboardEvent(event.type, {
+        key: event.key,
+        code: event.code,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+
+    function moveCranampCanvasToPiP(targetWindow) {
+      const doc = targetWindow.document;
+      doc.title = "Cranamp";
+      doc.head.innerHTML = `
+        <style>
+          :root {
+            color-scheme: dark;
+            background: #050608;
+          }
+
+          html,
+          body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            min-width: ${DEFAULT_SURFACE_SIZE.width}px;
+            min-height: ${DEFAULT_SURFACE_SIZE.height}px;
+            overflow: hidden;
+            background: #050608;
+          }
+
+          body {
+            display: grid;
+            place-items: start;
+          }
+
+          #cranamp-pip-host {
+            width: 100vw;
+            height: 100vh;
+            background: #050608;
+          }
+
+          canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background: #050608;
+            touch-action: none;
+          }
+        </style>
+      `;
+      doc.body.innerHTML = `<main id="cranamp-pip-host"></main>`;
+
+      savedCanvasStyle = canvas.getAttribute("style");
+      doc.getElementById("cranamp-pip-host").appendChild(canvas);
+      lastPipWindowSize = null;
+      applyCanvasSize(targetWindow, { resizeWindow: true });
+
+      doc.addEventListener("keydown", forwardKeyboardEvent);
+      doc.addEventListener("keyup", forwardKeyboardEvent);
+      targetWindow.addEventListener("pagehide", restoreCranampCanvas, { once: true });
+    }
+
+    function supportsFloatingMiniPlayer() {
+      return "documentPictureInPicture" in window;
+    }
+
+    async function openFloatingMiniPlayer(options = {}) {
+      const { suppressWarning = false } = options;
+      if (!supportsFloatingMiniPlayer() || openingPiP) {
+        return false;
+      }
+      if (pipWindow && !pipWindow.closed) {
+        pipWindow.focus();
+        return true;
+      }
+
+      openingPiP = true;
+      try {
+        pipWindow = await window.documentPictureInPicture.requestWindow({
+          width: cranampSize.width,
+          height: cranampSize.height,
+        });
+        pipButton.disabled = true;
+        pipButton.title = "Cranamp is floating";
+        moveCranampCanvasToPiP(pipWindow);
+        return true;
+      } catch (error) {
+        pipWindow = null;
+        enablePiPButton();
+        if (!suppressWarning) {
+          console.warn("Floating Cranamp could not open", error);
+        }
+        return false;
+      } finally {
+        openingPiP = false;
+      }
+    }
+
+    function enablePiPButton() {
+      if (supportsFloatingMiniPlayer()) {
+        pipButton.disabled = false;
+        pipButton.title = "Open floating Cranamp window";
+      }
+    }
+
+    function removeAutoFloatListeners() {
+      if (!autoFloatArmed) {
+        return;
+      }
+      autoFloatArmed = false;
+      window.removeEventListener("pointerdown", handleAutoFloatActivation, true);
+      window.removeEventListener("keydown", handleAutoFloatActivation, true);
+      window.removeEventListener("touchstart", handleAutoFloatActivation, true);
+    }
+
+    async function handleAutoFloatActivation() {
+      removeAutoFloatListeners();
+      await openFloatingMiniPlayer();
+    }
+
+    function armAutoFloatOnActivation() {
+      if (!supportsFloatingMiniPlayer() || autoFloatArmed || (pipWindow && !pipWindow.closed)) {
+        return;
+      }
+      autoFloatArmed = true;
+      window.addEventListener("pointerdown", handleAutoFloatActivation, true);
+      window.addEventListener("keydown", handleAutoFloatActivation, true);
+      window.addEventListener("touchstart", handleAutoFloatActivation, true);
+    }
+
+    async function autoOpenFloatingMiniPlayer() {
+      if (!supportsFloatingMiniPlayer()) {
+        return;
+      }
+      const opened = await openFloatingMiniPlayer({ suppressWarning: true });
+      if (!opened) {
+        armAutoFloatOnActivation();
+      }
+    }
+
+    if (!supportsFloatingMiniPlayer()) {
+      pipButton.disabled = true;
+      pipButton.title = "Floating Cranamp is not supported by this browser";
+    } else {
+      pipButton.addEventListener("click", openFloatingMiniPlayer);
+    }
+
+    window.cranampApplySurfaceSize = (width, height) => {
+      const size = validSurfaceSize({ width, height });
+      if (!size) {
+        return;
+      }
+      const sizeChanged = !sameSurfaceSize(cranampSize, size);
+      cranampSize = size;
+      applyCanvasSize(pipWindow, { resizeWindow: sizeChanged });
+    };
+
+    window.cranampCurrentSurfaceSize = measuredCanvasSize;
+
+    applyCanvasSize();
+    window.setInterval(() => applyCanvasSize(pipWindow), 250);
+
+    await init();
+    await run_app();
+    applyCanvasSize(pipWindow);
+    enablePiPButton();
+    await autoOpenFloatingMiniPlayer();
+  </script>
+</body>
+</html>

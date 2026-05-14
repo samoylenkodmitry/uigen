@@ -1,0 +1,26 @@
+{
+  "ace_step_source": "/home/s/develop/projects/musicgen/ACE-Step-1.5/gradio_outputs/cranamp-demo-raw/42fb38db-5976-6c17-961b-fa9885f0abfa.flac",
+  "bpm": null,
+  "duration": 120,
+  "extra_outputs": {
+    "lm_metadata": null,
+    "time_costs": {
+      "dit_diffusion_per_step_time_cost": 0.5328879654407501,
+      "dit_diffusion_time_cost": 4.263103723526001,
+      "dit_encoder_time_cost": 0.13630151748657227,
+      "dit_offload_time_cost": 1.6672172546386719,
+      "dit_total_time_cost": 11.111383438110352,
+      "dit_vae_decode_time_cost": 6.711978197097778,
+      "pipeline_total_time": 11.111383438110352
+    }
+  },
+  "generation_mode": "text-to-music DiT-only",
+  "lyrics": "[Instrumental]",
+  "model": "ACE-Step 1.5 / acestep-v15-turbo",
+  "output_stem": "cranamp-demo-03-lofi-jungle",
+  "prompt": "lo-fi jungle drum and bass instrumental, old computer music vibe, soft pads, clean loopable ending, original melody, no vocals, no samples, no artist reference, 120 seconds",
+  "raw_file": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-03-lofi-jungle.flac",
+  "reference_audio": null,
+  "seed": 610003,
+  "status_message": "Generation completed successfully!"
+}

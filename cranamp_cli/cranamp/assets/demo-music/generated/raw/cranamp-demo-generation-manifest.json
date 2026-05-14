@@ -1,0 +1,51 @@
+[
+  {
+    "bpm": null,
+    "duration": 100,
+    "output_stem": "cranamp-demo-01-retro-tracker",
+    "prompt": "retro 90s media player demo track, instrumental, tracker music, breakbeat, chiptune lead, warm bass, original melody, no vocals, no samples, no artist reference, 100 seconds",
+    "raw_file": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-01-retro-tracker.flac",
+    "seed": 610001,
+    "status": "skipped-existing"
+  },
+  {
+    "bpm": null,
+    "duration": 90,
+    "output_stem": "cranamp-demo-02-neon-ambient",
+    "prompt": "cyberpunk ambient electronic instrumental, dark blue neon mood, slow beat, nostalgic software demo music, original composition, no vocals, no samples, no artist reference, 90 seconds",
+    "raw_file": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-02-neon-ambient.flac",
+    "seed": 610002,
+    "sidecar": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-02-neon-ambient.json",
+    "status": "generated"
+  },
+  {
+    "bpm": null,
+    "duration": 120,
+    "output_stem": "cranamp-demo-03-lofi-jungle",
+    "prompt": "lo-fi jungle drum and bass instrumental, old computer music vibe, soft pads, clean loopable ending, original melody, no vocals, no samples, no artist reference, 120 seconds",
+    "raw_file": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-03-lofi-jungle.flac",
+    "seed": 610003,
+    "sidecar": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-03-lofi-jungle.json",
+    "status": "generated"
+  },
+  {
+    "bpm": 120,
+    "duration": 100,
+    "output_stem": "cranamp-demo-04-minimal-synthwave",
+    "prompt": "minimal synthwave demo music, old media player visualizer vibe, instrumental, original melody, no vocals, no samples, no artist reference, 120 bpm, 100 seconds",
+    "raw_file": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-04-minimal-synthwave.flac",
+    "seed": 610004,
+    "sidecar": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-04-minimal-synthwave.json",
+    "status": "generated"
+  },
+  {
+    "bpm": null,
+    "duration": 90,
+    "output_stem": "cranamp-demo-05-soft-chip-lounge",
+    "prompt": "soft chiptune lounge instrumental, cozy desktop software demo, warm square wave melody, gentle drums, original composition, no vocals, no samples, no artist reference, 90 seconds",
+    "raw_file": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-05-soft-chip-lounge.flac",
+    "seed": 610005,
+    "sidecar": "/home/s/develop/projects/cranamp/assets/demo-music/generated/raw/cranamp-demo-05-soft-chip-lounge.json",
+    "status": "generated"
+  }
+]

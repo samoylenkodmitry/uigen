@@ -1,0 +1,168 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  desktop:
+    name: Desktop ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: cranamp-linux-x86_64
+            platform: linux-x86_64
+            binary: target/release/cranamp
+            archive: tar.gz
+          - os: macos-latest
+            artifact: cranamp-macos
+            platform: macos
+            binary: target/release/cranamp
+            archive: tar.gz
+          - os: windows-latest
+            artifact: cranamp-windows-x86_64
+            platform: windows-x86_64
+            binary: target/release/cranamp.exe
+            archive: zip
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux audio/dialog dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Build
+        run: cargo build --release
+      - name: Package artifact
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          package_dir="release/cranamp-${version}-${{ matrix.platform }}"
+          mkdir -p "$package_dir/demo-music" assets
+          cp "${{ matrix.binary }}" "$package_dir/"
+          cp README.md LICENSE "$package_dir/"
+          cp assets/demo-music/generated/*.mp3 "$package_dir/demo-music/"
+          cp assets/demo-music/generated/cranamp-demo-playlist.m3u "$package_dir/demo-music/"
+          cp assets/demo-music/README.md assets/demo-music/LICENSES.md "$package_dir/demo-music/"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            powershell -Command "Compress-Archive -Path '$package_dir/*' -DestinationPath 'assets/cranamp-${version}-${{ matrix.platform }}.zip'"
+          else
+            tar -czf "assets/cranamp-${version}-${{ matrix.platform }}.tar.gz" -C release "cranamp-${version}-${{ matrix.platform }}"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: assets/cranamp-*
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Android NDK and cargo-ndk
+        shell: bash
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          cargo install cargo-ndk --locked
+      - name: Build APK
+        working-directory: platform/android
+        run: ./gradlew --no-daemon :app:assembleRelease
+      - name: Stage APK
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p assets
+          cp platform/android/app/build/outputs/apk/release/app-release.apk "assets/cranamp-${version}-android.apk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cranamp-android
+          path: assets/cranamp-*
+
+  ios:
+    name: iOS Libraries
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      - name: Build iOS device library
+        run: cargo build --release --target aarch64-apple-ios --lib --no-default-features --features ios,renderer-wgpu
+      - name: Build iOS simulator library
+        run: cargo build --release --target aarch64-apple-ios-sim --lib --no-default-features --features ios,renderer-wgpu
+      - name: Package iOS libraries
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          package_dir="release/cranamp-${version}-ios-libs"
+          mkdir -p "$package_dir/device-arm64" "$package_dir/simulator-arm64" assets
+          cp target/aarch64-apple-ios/release/libcranamp.a "$package_dir/device-arm64/"
+          cp target/aarch64-apple-ios-sim/release/libcranamp.a "$package_dir/simulator-arm64/"
+          cp README.md LICENSE "$package_dir/"
+          tar -czf "assets/cranamp-${version}-ios-libs.tar.gz" -C release "cranamp-${version}-ios-libs"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cranamp-ios
+          path: assets/cranamp-*
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Build widget
+        run: ./build-web.sh
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tar -czf "cranamp-${version}-web.tar.gz" -C dist .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cranamp-web
+          path: cranamp-*-web.tar.gz
+
+  publish:
+    name: Publish GitHub Release
+    needs: [desktop, android, ios, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Publish
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: false
+          body: |
+            Cranamp release assets for desktop, Android, iOS library embedding, and the WebAssembly widget.
+
+            Web widget: https://samoylenkodmitry.github.io/cranamp/
+          files: artifacts/**/*
