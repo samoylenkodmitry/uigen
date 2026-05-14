@@ -24,6 +24,12 @@ EXPORT_PROFILE = REPO_ROOT / "configs/export_profile_classic.json"
 DEFAULT_SKIN = REPO_ROOT / "assets/default_skin"
 
 
+def scale_pair(scale: float | tuple[float, float]) -> tuple[float, float]:
+    if isinstance(scale, tuple):
+        return scale
+    return (scale, scale)
+
+
 class Renderer:
     def __init__(self, skin_source: Path, canvas_w: int, canvas_h: int):
         self.canvas_w = canvas_w
@@ -54,13 +60,19 @@ class Renderer:
             self.images[key] = Image.fromarray(data)
         return self.images[key]
 
-    def mark_rect(self, component_id: int, rect: tuple[float, float, float, float], scale: float = 1.0) -> None:
+    def mark_rect(
+        self,
+        component_id: int,
+        rect: tuple[float, float, float, float],
+        scale: float | tuple[float, float] = 1.0,
+    ) -> None:
         x, y, w, h = rect
+        scale_x, scale_y = scale_pair(scale)
         self.rects[component_id] = encode_rect(
             x,
             y,
-            x + w * scale,
-            y + h * scale,
+            x + w * scale_x,
+            y + h * scale_y,
             canvas_w=self.canvas_w,
             canvas_h=self.canvas_h,
         )
@@ -71,15 +83,19 @@ class Renderer:
         file_name: str,
         src: tuple[int, int, int, int],
         dest: tuple[float, float],
-        scale: float,
+        scale: float | tuple[float, float],
         component_id: int | None = None,
     ) -> None:
         sx, sy, sw, sh = src
         dx, dy = dest
+        scale_x, scale_y = scale_pair(scale)
         source = self.image_for(file_name)
         crop = source.crop((sx, sy, sx + sw, sy + sh))
-        if scale != 1.0:
-            crop = crop.resize((max(1, round(sw * scale)), max(1, round(sh * scale))), Image.Resampling.NEAREST)
+        if scale_x != 1.0 or scale_y != 1.0:
+            crop = crop.resize(
+                (max(1, round(sw * scale_x)), max(1, round(sh * scale_y))),
+                Image.Resampling.NEAREST,
+            )
         self.canvas.alpha_composite(crop, (round(dx), round(dy)))
 
         slot = self.slots[slot_name]
@@ -109,32 +125,52 @@ class Renderer:
 
 def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -> dict:
     rng = random.Random(seed)
-    scale = rng.choice([1.0, 2.0])
-    total_h = int((116 + 116 + 261) * scale) + 24
+    stack_units_h = 116 + 116 + 261
+    fit_scale = min((canvas_w - 32) / 275, (canvas_h - 32) / stack_units_h)
+    max_scale = min(2.35, fit_scale)
+    scale = round(rng.uniform(2.0, max_scale), 4) if max_scale >= 2.0 else round(max_scale, 4)
+    total_h = int(stack_units_h * scale)
     main_w = int(275 * scale)
     x_space = max(0, canvas_w - main_w)
     y_space = max(0, canvas_h - total_h)
     main_x = rng.randint(0, x_space) if x_space else 0
-    main_y = rng.randint(0, min(y_space, 220)) if y_space else 0
+    main_y = rng.randint(0, y_space) if y_space else 0
 
-    def jittered_x() -> int:
-        return max(0, min(x_space, main_x + rng.randint(-48, 48)))
-
-    pressed = (seed % 6) if state_balanced else rng.choice([-1, -1, 0, 1, 2, 3, 4, 5])
+    pressed_options = [-1, 0, 1, 2, 3, 4, 5]
+    pressed = pressed_options[seed % len(pressed_options)] if state_balanced else rng.choice([-1, -1, 0, 1, 2, 3, 4, 5])
     volume = (seed % 28) / 27.0 if state_balanced else rng.random()
     balance = ((seed // 3) % 28) / 27.0 if state_balanced else rng.random()
     posbar = ((seed // 5) % 20) / 19.0 if state_balanced else rng.random()
 
+    def transform(dx: int, dy: int, sx: float, sy: float) -> dict[str, float]:
+        return {
+            "dx": rng.randint(-dx, dx),
+            "dy": rng.randint(-dy, dy),
+            "sx": round(rng.uniform(1.0 - sx, 1.0 + sx), 3),
+            "sy": round(rng.uniform(1.0 - sy, 1.0 + sy), 3),
+        }
+
     return {
-        "schema": "cranamp_cli_renderer_v1",
+        "schema": "cranamp_cli_renderer_v2",
         "seed": seed,
         "canvas_w": canvas_w,
         "canvas_h": canvas_h,
         "scale": scale,
         "windows": {
             "main": [main_x, main_y],
-            "eq": [jittered_x(), main_y + int(116 * scale) + 8],
-            "playlist": [jittered_x(), main_y + int(232 * scale) + 16],
+            "eq": [main_x, main_y + int(116 * scale)],
+            "playlist": [main_x, main_y + int((116 + 116) * scale)],
+        },
+        "component_transforms": {
+            "playback_indicator": transform(7, 5, 0.12, 0.14),
+            "mono_stereo": transform(8, 5, 0.12, 0.14),
+            "posbar": transform(12, 7, 0.12, 0.18),
+            "transport": transform(12, 9, 0.14, 0.16),
+            "volume": transform(8, 6, 0.13, 0.16),
+            "balance": transform(8, 6, 0.13, 0.16),
+            "shufrep": transform(10, 8, 0.14, 0.16),
+            "eq_sliders": transform(9, 8, 0.10, 0.14),
+            "playlist_scrollbar": transform(4, 10, 0.08, 0.12),
         },
         "state": {
             "pressed_transport_button": pressed,
@@ -155,6 +191,42 @@ def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -
 
 def scaled_xy(origin: list[int], local: tuple[float, float], scale: float) -> tuple[float, float]:
     return (origin[0] + local[0] * scale, origin[1] + local[1] * scale)
+
+
+def component_transform(params: dict, name: str) -> dict[str, float]:
+    return params.get("component_transforms", {}).get(
+        name,
+        {"dx": 0.0, "dy": 0.0, "sx": 1.0, "sy": 1.0},
+    )
+
+
+def component_scale(scale: float, transform: dict[str, float]) -> tuple[float, float]:
+    return (scale * float(transform["sx"]), scale * float(transform["sy"]))
+
+
+def transformed_xy(
+    origin: list[int],
+    local: tuple[float, float],
+    scale: float,
+    transform: dict[str, float],
+) -> tuple[float, float]:
+    return (
+        origin[0] + (local[0] + float(transform["dx"])) * scale,
+        origin[1] + (local[1] + float(transform["dy"])) * scale,
+    )
+
+
+def transformed_group_xy(
+    origin: list[int],
+    base: tuple[float, float],
+    offset: tuple[float, float],
+    scale: float,
+    transform: dict[str, float],
+) -> tuple[float, float]:
+    return (
+        origin[0] + (base[0] + float(transform["dx"]) + offset[0] * float(transform["sx"])) * scale,
+        origin[1] + (base[1] + float(transform["dy"]) + offset[1] * float(transform["sy"])) * scale,
+    )
 
 
 def render_main(renderer: Renderer, params: dict) -> None:
@@ -178,12 +250,43 @@ def render_main(renderer: Renderer, params: dict) -> None:
 
     playback = state["playback"]
     status_src = {"playing": (0, 0, 9, 9), "paused": (9, 0, 9, 9), "stopped": (18, 0, 9, 9)}[playback]
-    renderer.blit("PLAYPAUS", "PLAYPAUS.bmp", status_src, scaled_xy(origin, (26, 28), scale), scale, 22)
-    renderer.blit("MONOSTER", "MONOSTER.bmp", (0, 0, 56, 12), scaled_xy(origin, (212, 41), scale), scale, 21)
+    status_t = component_transform(params, "playback_indicator")
+    renderer.blit(
+        "PLAYPAUS",
+        "PLAYPAUS.bmp",
+        status_src,
+        transformed_xy(origin, (26, 28), scale, status_t),
+        component_scale(scale, status_t),
+        22,
+    )
+    mono_t = component_transform(params, "mono_stereo")
+    renderer.blit(
+        "MONOSTER",
+        "MONOSTER.bmp",
+        (0, 0, 56, 12),
+        transformed_xy(origin, (212, 41), scale, mono_t),
+        component_scale(scale, mono_t),
+        21,
+    )
 
-    renderer.blit("POSBAR", "POSBAR.bmp", (0, 0, 248, 10), scaled_xy(origin, (17, 72), scale), scale, 5)
+    posbar_t = component_transform(params, "posbar")
+    posbar_base = (17, 72)
+    renderer.blit(
+        "POSBAR",
+        "POSBAR.bmp",
+        (0, 0, 248, 10),
+        transformed_xy(origin, posbar_base, scale, posbar_t),
+        component_scale(scale, posbar_t),
+        5,
+    )
     pos_thumb_x = 17 + state["posbar"] * (248 - 29)
-    renderer.blit("POSBAR", "POSBAR.bmp", (248, 0, 29, 10), scaled_xy(origin, (pos_thumb_x, 72), scale), scale)
+    renderer.blit(
+        "POSBAR",
+        "POSBAR.bmp",
+        (248, 0, 29, 10),
+        transformed_group_xy(origin, posbar_base, (pos_thumb_x - 17, 0), scale, posbar_t),
+        component_scale(scale, posbar_t),
+    )
 
     pressed = state["pressed_transport_button"]
     buttons = [
@@ -194,29 +297,104 @@ def render_main(renderer: Renderer, params: dict) -> None:
         (11, 92, 0, 22, 18, 108, 88),
         (12, 114, 0, 22, 16, 136, 89),
     ]
+    transport_t = component_transform(params, "transport")
+    transport_base = (16, 88)
     for idx, sx, sy, sw, sh, dx, dy in buttons:
         src_y = sy + (18 if pressed == idx - 7 and idx != 12 else 0)
         if idx == 12 and pressed == 5:
             src_y = 16
-        renderer.blit("CBUTTONS", "CBUTTONS.bmp", (sx, src_y, sw, sh), scaled_xy(origin, (dx, dy), scale), scale, idx)
-    renderer.mark_rect(6, (*scaled_xy(origin, (16, 88), scale), 142, 18), scale)
+        renderer.blit(
+            "CBUTTONS",
+            "CBUTTONS.bmp",
+            (sx, src_y, sw, sh),
+            transformed_group_xy(origin, transport_base, (dx - 16, dy - 88), scale, transport_t),
+            component_scale(scale, transport_t),
+            idx,
+        )
+    renderer.mark_rect(
+        6,
+        (*transformed_xy(origin, transport_base, scale, transport_t), 142, 18),
+        component_scale(scale, transport_t),
+    )
 
     volume_frame = min(27, max(0, round(state["volume"] * 27)))
-    renderer.blit("VOLUME", "VOLUME.bmp", (0, volume_frame * 15, 68, 13), scaled_xy(origin, (107, 57), scale), scale, 13)
-    renderer.blit("VOLUME", "VOLUME.bmp", (15, 422, 14, 11), scaled_xy(origin, (107 + state["volume"] * 54, 58), scale), scale, 14)
+    volume_t = component_transform(params, "volume")
+    volume_base = (107, 57)
+    renderer.blit(
+        "VOLUME",
+        "VOLUME.bmp",
+        (0, volume_frame * 15, 68, 13),
+        transformed_xy(origin, volume_base, scale, volume_t),
+        component_scale(scale, volume_t),
+        13,
+    )
+    renderer.blit(
+        "VOLUME",
+        "VOLUME.bmp",
+        (15, 422, 14, 11),
+        transformed_group_xy(origin, volume_base, (state["volume"] * 54, 1), scale, volume_t),
+        component_scale(scale, volume_t),
+        14,
+    )
 
     balance_frame = min(27, max(0, round(state["balance"] * 27)))
-    renderer.blit("BALANCE", "BALANCE.bmp", (9, balance_frame * 15, 38, 13), scaled_xy(origin, (177, 57), scale), scale, 15)
-    renderer.blit("BALANCE", "BALANCE.bmp", (15, 422, 14, 11), scaled_xy(origin, (177 + state["balance"] * 24, 58), scale), scale, 16)
+    balance_t = component_transform(params, "balance")
+    balance_base = (177, 57)
+    renderer.blit(
+        "BALANCE",
+        "BALANCE.bmp",
+        (9, balance_frame * 15, 38, 13),
+        transformed_xy(origin, balance_base, scale, balance_t),
+        component_scale(scale, balance_t),
+        15,
+    )
+    renderer.blit(
+        "BALANCE",
+        "BALANCE.bmp",
+        (15, 422, 14, 11),
+        transformed_group_xy(origin, balance_base, (state["balance"] * 24, 1), scale, balance_t),
+        component_scale(scale, balance_t),
+        16,
+    )
 
     shuffle_src = (28, 30 if state["shuffle"] else 0, 47, 15)
     repeat_src = (0, 30 if state["repeat"] else 0, 28, 15)
     eq_src = (0, 73 if state["eq_on"] else 61, 23, 12)
     pl_src = (23, 73, 23, 12)
-    renderer.blit("SHUFREP", "SHUFREP.bmp", shuffle_src, scaled_xy(origin, (164, 89), scale), scale, 17)
-    renderer.blit("SHUFREP", "SHUFREP.bmp", repeat_src, scaled_xy(origin, (210, 89), scale), scale, 18)
-    renderer.blit("SHUFREP", "SHUFREP.bmp", eq_src, scaled_xy(origin, (219, 58), scale), scale, 19)
-    renderer.blit("SHUFREP", "SHUFREP.bmp", pl_src, scaled_xy(origin, (242, 58), scale), scale, 20)
+    shufrep_t = component_transform(params, "shufrep")
+    shufrep_base = (164, 58)
+    renderer.blit(
+        "SHUFREP",
+        "SHUFREP.bmp",
+        shuffle_src,
+        transformed_group_xy(origin, shufrep_base, (0, 31), scale, shufrep_t),
+        component_scale(scale, shufrep_t),
+        17,
+    )
+    renderer.blit(
+        "SHUFREP",
+        "SHUFREP.bmp",
+        repeat_src,
+        transformed_group_xy(origin, shufrep_base, (46, 31), scale, shufrep_t),
+        component_scale(scale, shufrep_t),
+        18,
+    )
+    renderer.blit(
+        "SHUFREP",
+        "SHUFREP.bmp",
+        eq_src,
+        transformed_group_xy(origin, shufrep_base, (55, 0), scale, shufrep_t),
+        component_scale(scale, shufrep_t),
+        19,
+    )
+    renderer.blit(
+        "SHUFREP",
+        "SHUFREP.bmp",
+        pl_src,
+        transformed_group_xy(origin, shufrep_base, (78, 0), scale, shufrep_t),
+        component_scale(scale, shufrep_t),
+        20,
+    )
 
 
 def render_eq(renderer: Renderer, params: dict) -> None:
@@ -240,17 +418,38 @@ def render_eq(renderer: Renderer, params: dict) -> None:
     slider_xs = [21, 78, 96, 114, 132, 150, 168, 186, 204, 222, 240]
     thumb_xs = [22, 79, 97, 115, 133, 151, 169, 187, 205, 223, 241]
     values = state["eq_values"]
+    eq_slider_t = component_transform(params, "eq_sliders")
+    eq_slider_base = (21, 38)
     for idx, value in enumerate(values):
         frame = min(27, max(0, round(value * 27)))
         src_x = 13 + (frame % 14) * 15
         src_y = 164 if frame < 14 else 229
         comp = 28 if idx == 0 else None
-        renderer.blit("EQMAIN", "EQMAIN.bmp", (src_x, src_y, 14, 63), scaled_xy(origin, (slider_xs[idx], 38), scale), scale, comp)
+        renderer.blit(
+            "EQMAIN",
+            "EQMAIN.bmp",
+            (src_x, src_y, 14, 63),
+            transformed_group_xy(origin, eq_slider_base, (slider_xs[idx] - 21, 0), scale, eq_slider_t),
+            component_scale(scale, eq_slider_t),
+            comp,
+        )
         thumb_y = 38 + value * (63 - 11)
-        renderer.blit("EQMAIN", "EQMAIN.bmp", (0, 164, 11, 11), scaled_xy(origin, (thumb_xs[idx], thumb_y), scale), scale)
+        renderer.blit(
+            "EQMAIN",
+            "EQMAIN.bmp",
+            (0, 164, 11, 11),
+            transformed_group_xy(
+                origin,
+                eq_slider_base,
+                (thumb_xs[idx] - 21, thumb_y - 38),
+                scale,
+                eq_slider_t,
+            ),
+            component_scale(scale, eq_slider_t),
+        )
 
-    group = (*scaled_xy(origin, (78, 38), scale), 176, 63)
-    renderer.mark_rect(29, group, scale)
+    group = (*transformed_group_xy(origin, eq_slider_base, (78 - 21, 0), scale, eq_slider_t), 176, 63)
+    renderer.mark_rect(29, group, component_scale(scale, eq_slider_t))
     for offset, rect in enumerate(derive_eq_band_rects(tuple(renderer.rects[29]))):
         renderer.rects[30 + offset] = rect
 
@@ -283,15 +482,23 @@ def render_playlist(renderer: Renderer, params: dict) -> None:
 
     renderer.blit("PLEDIT", "PLEDIT.bmp", (0, 72, 125, 38), scaled_xy(origin, (0, bottom_y), scale), scale)
     renderer.blit("PLEDIT", "PLEDIT.bmp", (126, 72, 150, 38), scaled_xy(origin, (125, bottom_y), scale), scale)
-    renderer.blit("PLEDIT", "PLEDIT.bmp", (205, 0, 75, 38), scaled_xy(origin, (200, bottom_y), scale), scale, 55)
 
     selected_y = 22 + min(17, int(state["playlist_selected_row"])) * 11
     renderer.fill_rect((*scaled_xy(origin, (12, selected_y), scale), 243 * scale, 9 * scale), (66, 53, 30, 255))
     renderer.mark_rect(44, (*scaled_xy(origin, (12, 20), scale), 243, list_h), scale)
     renderer.mark_rect(45, (*scaled_xy(origin, (12, selected_y), scale), 243, 9), scale)
-    renderer.mark_rect(46, (*scaled_xy(origin, (260, 20), scale), 8, list_h), scale)
+    scroll_t = component_transform(params, "playlist_scrollbar")
+    scroll_base = (260, 20)
+    renderer.mark_rect(46, (*transformed_xy(origin, scroll_base, scale, scroll_t), 8, list_h), component_scale(scale, scroll_t))
     thumb_y = 20 + state["playlist_scroll"] * max(1, list_h - 18)
-    renderer.blit("PLEDIT", "PLEDIT.bmp", (52, 53, 8, 18), scaled_xy(origin, (260, thumb_y), scale), scale, 47)
+    renderer.blit(
+        "PLEDIT",
+        "PLEDIT.bmp",
+        (52, 53, 8, 18),
+        transformed_group_xy(origin, scroll_base, (0, thumb_y - 20), scale, scroll_t),
+        component_scale(scale, scroll_t),
+        47,
+    )
     renderer.mark_rect(48, (*scaled_xy(origin, (0, bottom_y), scale), 275, 38), scale)
     footer_rects = {
         49: (10, bottom_y + 7, 28, 18),
@@ -300,6 +507,7 @@ def render_playlist(renderer: Renderer, params: dict) -> None:
         52: (99, bottom_y + 7, 36, 18),
         53: (228, bottom_y + 7, 28, 18),
         54: (139, bottom_y + 25, 58, 8),
+        55: (132, bottom_y + 10, 89, 23),
         56: (255, bottom_y + 18, 20, 20),
         57: (250, 0, 25, 20),
         58: (250, 0, 25, 20),
