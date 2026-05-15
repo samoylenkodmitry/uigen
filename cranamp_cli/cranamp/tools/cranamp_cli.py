@@ -138,6 +138,7 @@ class Renderer:
         rect: tuple[float, float, float, float],
         scale: float | tuple[float, float] = 1.0,
     ) -> None:
+        probe_offset = 3
         x, y, w, h = rect
         scale_x, scale_y = scale_pair(scale)
         x0 = max(0, min(self.canvas_w - 1, round(x)))
@@ -148,14 +149,14 @@ class Renderer:
         cy = max(0, min(self.canvas_h - 1, (y0 + y1 - 1) // 2))
         pixels = self.canvas.load()
         samples = []
-        if y0 > 0:
-            samples.append(pixels[cx, y0 - 1])
-        if y1 < self.canvas_h:
-            samples.append(pixels[cx, y1])
-        if x0 > 0:
-            samples.append(pixels[x0 - 1, cy])
-        if x1 < self.canvas_w:
-            samples.append(pixels[x1, cy])
+        if y0 >= probe_offset:
+            samples.append(pixels[cx, y0 - probe_offset])
+        if y1 + probe_offset - 1 < self.canvas_h:
+            samples.append(pixels[cx, y1 + probe_offset - 1])
+        if x0 >= probe_offset:
+            samples.append(pixels[x0 - probe_offset, cy])
+        if x1 + probe_offset - 1 < self.canvas_w:
+            samples.append(pixels[x1 + probe_offset - 1, cy])
         if not samples:
             samples.append((14, 14, 18, 255))
         avg = tuple(int(round(sum(sample[channel] for sample in samples) / len(samples))) for channel in range(4))
