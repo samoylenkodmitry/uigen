@@ -19,8 +19,8 @@ def main() -> int:
     parser.add_argument("--cranamp-cli", default="cranamp_cli/cranamp-cli")
     parser.add_argument("--out", default="data_v0")
     parser.add_argument("--variants", type=int, default=4)
-    parser.add_argument("--canvas-w", type=int, default=768)
-    parser.add_argument("--canvas-h", type=int, default=1280)
+    parser.add_argument("--canvas-w", type=int, default=941)
+    parser.add_argument("--canvas-h", type=int, default=1672)
     parser.add_argument("--state-balanced", action="store_true")
     args = parser.parse_args()
 
@@ -68,4 +68,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -8,7 +8,7 @@ import random
 import sys
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
@@ -18,7 +18,7 @@ from atlas_ai.rects import derive_eq_band_rects, encode_rect
 from atlas_ai.skins import load_default_assets, load_skin_assets, normalize_name
 
 
-CANVAS_DEFAULT = (768, 1280)
+CANVAS_DEFAULT = (941, 1672)
 ATLAS_PROFILE = REPO_ROOT / "configs/atlas_v1.json"
 EXPORT_PROFILE = REPO_ROOT / "configs/export_profile_classic.json"
 DEFAULT_SKIN = REPO_ROOT / "assets/default_skin"
@@ -77,6 +77,17 @@ class Renderer:
             canvas_h=self.canvas_h,
         )
 
+    def mark_abs_rect(self, component_id: int, rect: tuple[float, float, float, float]) -> None:
+        x0, y0, x1, y1 = rect
+        self.rects[component_id] = encode_rect(
+            x0,
+            y0,
+            x1,
+            y1,
+            canvas_w=self.canvas_w,
+            canvas_h=self.canvas_h,
+        )
+
     def blit(
         self,
         slot_name: str,
@@ -122,19 +133,49 @@ class Renderer:
             fill=color,
         )
 
+    def erase_rect_with_edge_average(
+        self,
+        rect: tuple[float, float, float, float],
+        scale: float | tuple[float, float] = 1.0,
+    ) -> None:
+        x, y, w, h = rect
+        scale_x, scale_y = scale_pair(scale)
+        x0 = max(0, min(self.canvas_w - 1, round(x)))
+        y0 = max(0, min(self.canvas_h - 1, round(y)))
+        x1 = max(x0 + 1, min(self.canvas_w, round(x + w * scale_x)))
+        y1 = max(y0 + 1, min(self.canvas_h, round(y + h * scale_y)))
+        cx = max(0, min(self.canvas_w - 1, (x0 + x1 - 1) // 2))
+        cy = max(0, min(self.canvas_h - 1, (y0 + y1 - 1) // 2))
+        pixels = self.canvas.load()
+        samples = []
+        if y0 > 0:
+            samples.append(pixels[cx, y0 - 1])
+        if y1 < self.canvas_h:
+            samples.append(pixels[cx, y1])
+        if x0 > 0:
+            samples.append(pixels[x0 - 1, cy])
+        if x1 < self.canvas_w:
+            samples.append(pixels[x1, cy])
+        if not samples:
+            samples.append((14, 14, 18, 255))
+        avg = tuple(int(round(sum(sample[channel] for sample in samples) / len(samples))) for channel in range(4))
+        ImageDraw.Draw(self.canvas).rectangle([x0, y0, x1 - 1, y1 - 1], fill=avg)
+
 
 def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -> dict:
     rng = random.Random(seed)
     stack_units_h = 116 + 116 + 261
-    fit_scale = min((canvas_w - 32) / 275, (canvas_h - 32) / stack_units_h)
-    max_scale = min(2.35, fit_scale)
-    scale = round(rng.uniform(2.0, max_scale), 4) if max_scale >= 2.0 else round(max_scale, 4)
-    total_h = int(stack_units_h * scale)
-    main_w = int(275 * scale)
-    x_space = max(0, canvas_w - main_w)
-    y_space = max(0, canvas_h - total_h)
-    main_x = rng.randint(0, x_space) if x_space else 0
-    main_y = rng.randint(0, y_space) if y_space else 0
+    fit_scale = min(canvas_w / 275, canvas_h / stack_units_h)
+    max_scale = min(3.4, fit_scale)
+    min_scale = min(2.0, max_scale)
+    if max_scale > min_scale and rng.random() < 0.35:
+        scale = round(max_scale, 4)
+    elif max_scale > min_scale:
+        scale = round(rng.uniform(min_scale, max_scale), 4)
+    else:
+        scale = round(max_scale, 4)
+    main_x = 0
+    main_y = 0
 
     pressed_options = [-1, 0, 1, 2, 3, 4, 5]
     pressed = pressed_options[seed % len(pressed_options)] if state_balanced else rng.choice([-1, -1, 0, 1, 2, 3, 4, 5])
@@ -142,16 +183,68 @@ def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -
     balance = ((seed // 3) % 28) / 27.0 if state_balanced else rng.random()
     posbar = ((seed // 5) % 20) / 19.0 if state_balanced else rng.random()
 
+    def signed_int(limit: int) -> int:
+        if limit <= 0:
+            return 0
+        value = 0
+        while value == 0:
+            value = rng.randint(-limit, limit)
+        return value
+
+    def scale_value(delta: float) -> float:
+        return round(1.0 + rng.choice([-1.0, 1.0]) * rng.uniform(0.08, delta), 3)
+
     def transform(dx: int, dy: int, sx: float, sy: float) -> dict[str, float]:
+        mode = rng.choice(
+            [
+                "move",
+                "scalex",
+                "scaley",
+                "scalexy",
+                "move_scalex",
+                "move_scaley",
+                "move_scalexy",
+            ]
+        )
+        move = mode.startswith("move") or mode == "move"
+        scale_x = "scalex" in mode
+        scale_y = "scaley" in mode or mode.endswith("scalexy")
         return {
-            "dx": rng.randint(-dx, dx),
-            "dy": rng.randint(-dy, dy),
-            "sx": round(rng.uniform(1.0 - sx, 1.0 + sx), 3),
-            "sy": round(rng.uniform(1.0 - sy, 1.0 + sy), 3),
+            "mode": mode,
+            "dx": signed_int(dx) if move else 0,
+            "dy": signed_int(dy) if move else 0,
+            "sx": scale_value(sx) if scale_x else 1.0,
+            "sy": scale_value(sy) if scale_y else 1.0,
         }
 
+    playlist_entries = [
+        f"{idx + 1:02d}. {artist} - {title} {duration}"
+        for idx, (artist, title, duration) in enumerate(
+            [
+                ("Cranamp", "Cold Start", "3:11"),
+                ("Night Bus", "Status Line", "4:02"),
+                ("Small Grid", "Blue Window", "2:49"),
+                ("Frame Step", "Seek Position", "5:18"),
+                ("Raster Kids", "Button State", "3:36"),
+                ("Hidden Tab", "Equalized", "4:44"),
+                ("Null Track", "Stub Name", "2:55"),
+                ("Palette Lab", "Gamma Drift", "3:28"),
+                ("Mono Deck", "Stereo Flag", "4:17"),
+                ("Pixel Sort", "List Mode", "3:05"),
+                ("Old Skin", "Footer Menu", "2:41"),
+                ("Sample Bus", "Render Pass", "5:01"),
+                ("Track Mask", "Visible Atlas", "3:52"),
+                ("Synth Log", "Histogram", "4:10"),
+                ("Locator", "Top Left", "3:33"),
+                ("Blue Metal", "Playlist Row", "2:58"),
+                ("Checksum", "Replay", "3:47"),
+                ("Final Slot", "Rect Label", "4:25"),
+            ]
+        )
+    ]
+
     return {
-        "schema": "cranamp_cli_renderer_v2",
+        "schema": "cranamp_cli_renderer_v3",
         "seed": seed,
         "canvas_w": canvas_w,
         "canvas_h": canvas_h,
@@ -162,16 +255,27 @@ def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -
             "playlist": [main_x, main_y + int((116 + 116) * scale)],
         },
         "component_transforms": {
-            "playback_indicator": transform(7, 5, 0.12, 0.14),
-            "mono_stereo": transform(8, 5, 0.12, 0.14),
-            "posbar": transform(12, 7, 0.12, 0.18),
-            "transport": transform(12, 9, 0.14, 0.16),
-            "volume": transform(8, 6, 0.13, 0.16),
-            "balance": transform(8, 6, 0.13, 0.16),
-            "shufrep": transform(10, 8, 0.14, 0.16),
-            "eq_sliders": transform(9, 8, 0.10, 0.14),
-            "playlist_scrollbar": transform(4, 10, 0.08, 0.12),
+            "playback_indicator": transform(12, 8, 0.32, 0.32),
+            "mono_stereo": transform(14, 8, 0.30, 0.30),
+            "posbar": transform(22, 10, 0.34, 0.42),
+            "transport": transform(12, 12, 0.34, 0.34),
+            "transport_prev": transform(10, 12, 0.34, 0.34),
+            "transport_play": transform(14, 12, 0.34, 0.34),
+            "transport_pause": transform(14, 12, 0.34, 0.34),
+            "transport_stop": transform(14, 12, 0.34, 0.34),
+            "transport_next": transform(14, 12, 0.34, 0.34),
+            "transport_eject": transform(14, 12, 0.34, 0.34),
+            "volume": transform(16, 10, 0.40, 0.40),
+            "balance": transform(16, 10, 0.40, 0.40),
+            "shufrep": transform(18, 14, 0.40, 0.40),
+            "shuffle": transform(18, 14, 0.40, 0.40),
+            "repeat": transform(18, 14, 0.40, 0.40),
+            "eq_toggle": transform(18, 14, 0.40, 0.40),
+            "pl_toggle": transform(18, 14, 0.40, 0.40),
+            "eq_sliders": transform(12, 14, 0.30, 0.35),
+            "playlist_scrollbar": transform(4, 18, 0.18, 0.28),
         },
+        "playlist_entries": playlist_entries,
         "state": {
             "pressed_transport_button": pressed,
             "volume": volume,
@@ -185,6 +289,7 @@ def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -
             "playlist_scroll": rng.random(),
             "playlist_selected_row": rng.randint(0, 17),
             "playback": rng.choice(["playing", "paused", "stopped"]),
+            "histogram": [rng.random() for _ in range(16)],
         },
     }
 
@@ -193,10 +298,14 @@ def scaled_xy(origin: list[int], local: tuple[float, float], scale: float) -> tu
     return (origin[0] + local[0] * scale, origin[1] + local[1] * scale)
 
 
-def component_transform(params: dict, name: str) -> dict[str, float]:
-    return params.get("component_transforms", {}).get(
+def component_transform(params: dict, name: str, fallback: str | None = None) -> dict[str, float]:
+    transforms = params.get("component_transforms", {})
+    return transforms.get(
         name,
-        {"dx": 0.0, "dy": 0.0, "sx": 1.0, "sy": 1.0},
+        transforms.get(
+            fallback,
+            {"mode": "identity", "dx": 0.0, "dy": 0.0, "sx": 1.0, "sy": 1.0},
+        ),
     )
 
 
@@ -229,6 +338,63 @@ def transformed_group_xy(
     )
 
 
+def erase_control(
+    renderer: Renderer,
+    origin: list[int],
+    rect: tuple[float, float, float, float],
+    scale: float,
+) -> None:
+    x, y, w, h = rect
+    renderer.erase_rect_with_edge_average((*scaled_xy(origin, (x, y), scale), w, h), scale)
+
+
+def abs_rect(dest: tuple[float, float], src: tuple[int, int, int, int], scale: float | tuple[float, float]) -> tuple[float, float, float, float]:
+    _, _, w, h = src
+    scale_x, scale_y = scale_pair(scale)
+    return (dest[0], dest[1], dest[0] + w * scale_x, dest[1] + h * scale_y)
+
+
+def union_abs_rects(rects: list[tuple[float, float, float, float]]) -> tuple[float, float, float, float]:
+    return (
+        min(rect[0] for rect in rects),
+        min(rect[1] for rect in rects),
+        max(rect[2] for rect in rects),
+        max(rect[3] for rect in rects),
+    )
+
+
+def draw_main_histogram(renderer: Renderer, origin: list[int], scale: float, values: list[float]) -> None:
+    values = values or [0.0] * 16
+    area_x, area_y, area_w, area_h = 27, 43, 70, 16
+    renderer.fill_rect((*scaled_xy(origin, (area_x, area_y), scale), area_w * scale, area_h * scale), (0, 0, 0, 255))
+    bar_w = area_w / len(values)
+    for idx, value in enumerate(values):
+        height = max(1.0, min(area_h - 2, value * (area_h - 2)))
+        x = area_x + idx * bar_w + 0.75
+        y = area_y + area_h - height - 1
+        color = (44, 196, 184, 255) if idx % 3 else (226, 126, 39, 255)
+        renderer.fill_rect((*scaled_xy(origin, (x, y), scale), max(1.0, (bar_w - 1.4) * scale), height * scale), color)
+
+
+def draw_playlist_entries(
+    renderer: Renderer,
+    origin: list[int],
+    scale: float,
+    entries: list[str],
+    selected_row: int,
+    list_h: int,
+) -> None:
+    list_w = 243
+    layer = Image.new("RGBA", (list_w, list_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    font = ImageFont.load_default()
+    for row, entry in enumerate(entries[: list_h // 11]):
+        color = (232, 238, 220, 255) if row == selected_row else (93, 184, 207, 255)
+        draw.text((4, 2 + row * 11), entry[:38], font=font, fill=color)
+    resized = layer.resize((max(1, round(list_w * scale)), max(1, round(list_h * scale))), Image.Resampling.NEAREST)
+    renderer.canvas.alpha_composite(resized, (round(origin[0] + 12 * scale), round(origin[1] + 20 * scale)))
+
+
 def render_main(renderer: Renderer, params: dict) -> None:
     scale = params["scale"]
     origin = params["windows"]["main"]
@@ -247,6 +413,25 @@ def render_main(renderer: Renderer, params: dict) -> None:
     renderer.mark_rect(2, (*scaled_xy(origin, (24, 26), scale), 77, 38), scale)
     renderer.mark_rect(3, (*scaled_xy(origin, (111, 27), scale), 150, 12), scale)
     renderer.mark_rect(4, (*scaled_xy(origin, (24, 43), scale), 76, 16), scale)
+    draw_main_histogram(renderer, origin, scale, state.get("histogram", [0.0] * 16))
+    for rect in [
+        (26, 28, 9, 9),
+        (212, 41, 56, 12),
+        (17, 72, 248, 10),
+        (16, 88, 23, 18),
+        (39, 88, 23, 18),
+        (62, 88, 23, 18),
+        (85, 88, 23, 18),
+        (108, 88, 22, 18),
+        (136, 89, 22, 16),
+        (107, 57, 68, 13),
+        (177, 57, 38, 13),
+        (164, 89, 47, 15),
+        (210, 89, 28, 15),
+        (219, 58, 23, 12),
+        (242, 58, 23, 12),
+    ]:
+        erase_control(renderer, origin, rect, scale)
 
     playback = state["playback"]
     status_src = {"playing": (0, 0, 9, 9), "paused": (9, 0, 9, 9), "stopped": (18, 0, 9, 9)}[playback]
@@ -271,13 +456,24 @@ def render_main(renderer: Renderer, params: dict) -> None:
 
     posbar_t = component_transform(params, "posbar")
     posbar_base = (17, 72)
+    posbar_scale = component_scale(scale, posbar_t)
+    posbar_dest = transformed_xy(origin, posbar_base, scale, posbar_t)
     renderer.blit(
         "POSBAR",
         "POSBAR.bmp",
         (0, 0, 248, 10),
-        transformed_xy(origin, posbar_base, scale, posbar_t),
-        component_scale(scale, posbar_t),
+        posbar_dest,
+        posbar_scale,
         5,
+    )
+    renderer.fill_rect(
+        (
+            posbar_dest[0] + 5 * posbar_scale[0],
+            posbar_dest[1] + 4 * posbar_scale[1],
+            max(1.0, (state["posbar"] * 224) * posbar_scale[0]),
+            max(1.0, 2 * posbar_scale[1]),
+        ),
+        (226, 126, 39, 255),
     )
     pos_thumb_x = 17 + state["posbar"] * (248 - 29)
     renderer.blit(
@@ -285,7 +481,7 @@ def render_main(renderer: Renderer, params: dict) -> None:
         "POSBAR.bmp",
         (248, 0, 29, 10),
         transformed_group_xy(origin, posbar_base, (pos_thumb_x - 17, 0), scale, posbar_t),
-        component_scale(scale, posbar_t),
+        posbar_scale,
     )
 
     pressed = state["pressed_transport_button"]
@@ -297,25 +493,25 @@ def render_main(renderer: Renderer, params: dict) -> None:
         (11, 92, 0, 22, 18, 108, 88),
         (12, 114, 0, 22, 16, 136, 89),
     ]
-    transport_t = component_transform(params, "transport")
-    transport_base = (16, 88)
-    for idx, sx, sy, sw, sh, dx, dy in buttons:
+    transport_names = ["prev", "play", "pause", "stop", "next", "eject"]
+    transport_rects = []
+    for (idx, sx, sy, sw, sh, dx, dy), name in zip(buttons, transport_names):
         src_y = sy + (18 if pressed == idx - 7 and idx != 12 else 0)
         if idx == 12 and pressed == 5:
             src_y = 16
+        transport_t = component_transform(params, f"transport_{name}", "transport")
+        transport_scale = component_scale(scale, transport_t)
+        dest = transformed_xy(origin, (dx, dy), scale, transport_t)
         renderer.blit(
             "CBUTTONS",
             "CBUTTONS.bmp",
             (sx, src_y, sw, sh),
-            transformed_group_xy(origin, transport_base, (dx - 16, dy - 88), scale, transport_t),
-            component_scale(scale, transport_t),
+            dest,
+            transport_scale,
             idx,
         )
-    renderer.mark_rect(
-        6,
-        (*transformed_xy(origin, transport_base, scale, transport_t), 142, 18),
-        component_scale(scale, transport_t),
-    )
+        transport_rects.append(abs_rect(dest, (sx, src_y, sw, sh), transport_scale))
+    renderer.mark_abs_rect(6, union_abs_rects(transport_rects))
 
     volume_frame = min(27, max(0, round(state["volume"] * 27)))
     volume_t = component_transform(params, "volume")
@@ -361,38 +557,40 @@ def render_main(renderer: Renderer, params: dict) -> None:
     repeat_src = (0, 30 if state["repeat"] else 0, 28, 15)
     eq_src = (0, 73 if state["eq_on"] else 61, 23, 12)
     pl_src = (23, 73, 23, 12)
-    shufrep_t = component_transform(params, "shufrep")
-    shufrep_base = (164, 58)
+    shuffle_t = component_transform(params, "shuffle", "shufrep")
     renderer.blit(
         "SHUFREP",
         "SHUFREP.bmp",
         shuffle_src,
-        transformed_group_xy(origin, shufrep_base, (0, 31), scale, shufrep_t),
-        component_scale(scale, shufrep_t),
+        transformed_xy(origin, (164, 89), scale, shuffle_t),
+        component_scale(scale, shuffle_t),
         17,
     )
+    repeat_t = component_transform(params, "repeat", "shufrep")
     renderer.blit(
         "SHUFREP",
         "SHUFREP.bmp",
         repeat_src,
-        transformed_group_xy(origin, shufrep_base, (46, 31), scale, shufrep_t),
-        component_scale(scale, shufrep_t),
+        transformed_xy(origin, (210, 89), scale, repeat_t),
+        component_scale(scale, repeat_t),
         18,
     )
+    eq_toggle_t = component_transform(params, "eq_toggle", "shufrep")
     renderer.blit(
         "SHUFREP",
         "SHUFREP.bmp",
         eq_src,
-        transformed_group_xy(origin, shufrep_base, (55, 0), scale, shufrep_t),
-        component_scale(scale, shufrep_t),
+        transformed_xy(origin, (219, 58), scale, eq_toggle_t),
+        component_scale(scale, eq_toggle_t),
         19,
     )
+    pl_toggle_t = component_transform(params, "pl_toggle", "shufrep")
     renderer.blit(
         "SHUFREP",
         "SHUFREP.bmp",
         pl_src,
-        transformed_group_xy(origin, shufrep_base, (78, 0), scale, shufrep_t),
-        component_scale(scale, shufrep_t),
+        transformed_xy(origin, (242, 58), scale, pl_toggle_t),
+        component_scale(scale, pl_toggle_t),
         20,
     )
 
@@ -419,7 +617,8 @@ def render_eq(renderer: Renderer, params: dict) -> None:
     thumb_xs = [22, 79, 97, 115, 133, 151, 169, 187, 205, 223, 241]
     values = state["eq_values"]
     eq_slider_t = component_transform(params, "eq_sliders")
-    eq_slider_base = (21, 38)
+    for slider_x in slider_xs:
+        erase_control(renderer, origin, (slider_x, 38, 14, 63), scale)
     for idx, value in enumerate(values):
         frame = min(27, max(0, round(value * 27)))
         src_x = 13 + (frame % 14) * 15
@@ -429,27 +628,25 @@ def render_eq(renderer: Renderer, params: dict) -> None:
             "EQMAIN",
             "EQMAIN.bmp",
             (src_x, src_y, 14, 63),
-            transformed_group_xy(origin, eq_slider_base, (slider_xs[idx] - 21, 0), scale, eq_slider_t),
+            transformed_xy(origin, (slider_xs[idx], 38), scale, eq_slider_t),
             component_scale(scale, eq_slider_t),
             comp,
         )
         thumb_y = 38 + value * (63 - 11)
+        thumb_dest = (
+            origin[0] + (thumb_xs[idx] + float(eq_slider_t["dx"])) * scale,
+            origin[1] + (38 + float(eq_slider_t["dy"]) + (thumb_y - 38) * float(eq_slider_t["sy"])) * scale,
+        )
         renderer.blit(
             "EQMAIN",
             "EQMAIN.bmp",
             (0, 164, 11, 11),
-            transformed_group_xy(
-                origin,
-                eq_slider_base,
-                (thumb_xs[idx] - 21, thumb_y - 38),
-                scale,
-                eq_slider_t,
-            ),
+            thumb_dest,
             component_scale(scale, eq_slider_t),
         )
 
-    group = (*transformed_group_xy(origin, eq_slider_base, (78 - 21, 0), scale, eq_slider_t), 176, 63)
-    renderer.mark_rect(29, group, component_scale(scale, eq_slider_t))
+    group = (*transformed_xy(origin, (78, 38), scale, eq_slider_t), 176, 63)
+    renderer.mark_rect(29, group, (scale, scale * float(eq_slider_t["sy"])))
     for offset, rect in enumerate(derive_eq_band_rects(tuple(renderer.rects[29]))):
         renderer.rects[30 + offset] = rect
 
@@ -485,12 +682,21 @@ def render_playlist(renderer: Renderer, params: dict) -> None:
 
     selected_y = 22 + min(17, int(state["playlist_selected_row"])) * 11
     renderer.fill_rect((*scaled_xy(origin, (12, selected_y), scale), 243 * scale, 9 * scale), (66, 53, 30, 255))
+    draw_playlist_entries(
+        renderer,
+        origin,
+        scale,
+        params.get("playlist_entries", []),
+        min(17, int(state["playlist_selected_row"])),
+        list_h,
+    )
     renderer.mark_rect(44, (*scaled_xy(origin, (12, 20), scale), 243, list_h), scale)
     renderer.mark_rect(45, (*scaled_xy(origin, (12, selected_y), scale), 243, 9), scale)
     scroll_t = component_transform(params, "playlist_scrollbar")
     scroll_base = (260, 20)
     renderer.mark_rect(46, (*transformed_xy(origin, scroll_base, scale, scroll_t), 8, list_h), component_scale(scale, scroll_t))
     thumb_y = 20 + state["playlist_scroll"] * max(1, list_h - 18)
+    erase_control(renderer, origin, (260, thumb_y, 8, 18), scale)
     renderer.blit(
         "PLEDIT",
         "PLEDIT.bmp",

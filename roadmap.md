@@ -220,8 +220,8 @@ cranamp-cli dump-classic-spec \
 cranamp-cli render-random \
   --skin-dir <skin_dir> \
   --seed <int> \
-  --canvas-w 768 \
-  --canvas-h 1280 \
+  --canvas-w 941 \
+  --canvas-h 1672 \
   --out-view <png> \
   --out-rects <rects.f32> \
   --out-state <state.f32> \
@@ -234,8 +234,8 @@ cranamp-cli render-random \
 cranamp-cli render-with-params \
   --skin-dir <skin_dir> \
   --params <params.json> \
-  --canvas-w 768 \
-  --canvas-h 1280 \
+  --canvas-w 941 \
+  --canvas-h 1672 \
   --out-view <png>
 ```
 
@@ -258,17 +258,17 @@ Cranamp renderer instrumentation tasks:
 
 ## 5. Fixed image sizes and coordinate conventions
 
-- [ ] Use fixed input render width `INPUT_W = 768`.
-- [ ] Use fixed input render height `INPUT_H = 1280`.
-- [ ] Input tensor shape is `[3, 1280, 768]`.
-- [ ] Normalize x coordinates by `768`.
-- [ ] Normalize y coordinates by `1280`.
+- [ ] Use fixed input render width `INPUT_W = 941`.
+- [ ] Use fixed input render height `INPUT_H = 1672`.
+- [ ] Input tensor shape is `[3, 1672, 941]`.
+- [ ] Normalize x coordinates by `941`.
+- [ ] Normalize y coordinates by `1672`.
 - [ ] Use fixed target atlas width `ATLAS_W = 1024`.
 - [ ] Use fixed target atlas height `ATLAS_H = 1024`.
 - [ ] Target atlas tensor shape is `[3, 1024, 1024]`.
 - [ ] Target atlas PNG mode is RGB.
 - [ ] V0 target atlas has no alpha channel.
-- [ ] Use letterboxing for arbitrary inference images into `768x1280`.
+- [ ] Use letterboxing for arbitrary inference images into `941x1672`.
 - [ ] Preserve letterbox transform metadata for potential future unletterboxing/debug.
 - [ ] Training augmentation must include random letterbox/pad simulation so GeoNet sees inputs similar to arbitrary AI mockup aspect ratios.
 
@@ -500,8 +500,8 @@ data_v0/valid_skins.csv
 - [ ] Rect file shape is `[80, 5]`.
 - [ ] Rect file is flattened as `80 * 5` float32 values.
 - [ ] Each rect entry is `[x0_norm, y0_norm, x1_norm, y1_norm, visible]`.
-- [ ] Normalize x coordinates by `INPUT_W = 768`.
-- [ ] Normalize y coordinates by `INPUT_H = 1280`.
+- [ ] Normalize x coordinates by `INPUT_W = 941`.
+- [ ] Normalize y coordinates by `INPUT_H = 1672`.
 - [ ] Set `visible = 1.0` if component was drawn and visible.
 - [ ] Set `visible = 0.0` if component was absent, hidden, clipped away, or not drawn.
 - [ ] Clip rects to canvas bounds before normalization.
@@ -694,8 +694,8 @@ Dataset generation command:
 python scripts/02_render_dataset.py \
   --valid-skins data_v0/valid_skins.csv \
   --variants 16 \
-  --canvas-w 768 \
-  --canvas-h 1280 \
+  --canvas-w 941 \
+  --canvas-h 1672 \
   --state-balanced false \
   --cranamp-cli ./cranamp_cli/cranamp-cli \
   --out data_v0
@@ -713,68 +713,36 @@ data_v0/params/{skin_id}_{variant_id}.json
 
 ### 12.1 Render canvas
 
-- [x] Use canvas width `768`.
-- [x] Use canvas height `1280`.
+- [x] Use canvas width `941`.
+- [x] Use canvas height `1672`.
 - [x] Use RGB output.
 - [x] Use solid dark background RGB `(16,16,16)` or Cranamp default background.
 - [x] Keep background choice deterministic and logged in params.
 
 ### 12.2 Window scale and placement distributions
 
-- [ ] Sample global scale `s_global ~ Uniform(1.80, 3.20)`.
-- [ ] Sample `main_sx = s_global * Uniform(0.88, 1.18)`.
-- [ ] Sample `main_sy = s_global * Uniform(0.88, 1.18)`.
-- [ ] Sample `main_x = Uniform(20, 768 - 275 * main_sx - 20)`.
-- [ ] Sample `main_y = Uniform(20, 160)`.
-- [ ] Sample `eq_sx = s_global * Uniform(0.88, 1.18)`.
-- [ ] Sample `eq_sy = s_global * Uniform(0.88, 1.18)`.
-- [ ] Sample `eq_x = main_x + Uniform(-70, 70)`.
-- [ ] Sample `eq_y = main_y + 116 * main_sy + Uniform(-60, 90)`.
-- [ ] Sample `pl_sx = s_global * Uniform(0.88, 1.20)`.
-- [ ] Sample `pl_sy = s_global * Uniform(0.88, 1.20)`.
-- [ ] Sample `pl_x = main_x + Uniform(-80, 80)`.
-- [ ] Sample `pl_y = eq_y + 116 * eq_sy + Uniform(-70, 110)`.
-- [ ] Sample `pl_base_h = Choice([186, 232, 275, 320])`.
+- [x] Sample global scale up to the top-left 941x1672 fit, with some samples leaving blank padding.
+- [x] Use one uniform window scale for the whole main/EQ/playlist stack.
+- [x] Keep `main_x = 0` and `main_y = 0`.
+- [x] Keep `eq_x = main_x` and `eq_y = main_y + 116 * scale`.
+- [x] Keep `pl_x = main_x`.
+- [x] Keep `pl_y = eq_y + 116 * scale`.
 - [ ] Clip windows to canvas if needed and mark component visibility accordingly.
 
 ### 12.3 Per-component local displacement and scale distributions
 
-- [ ] Sample `transport_row_dx ~ Uniform(-12, 12)`.
-- [ ] Sample `transport_row_dy ~ Uniform(-12, 12)`.
-- [ ] Sample `transport_row_sx ~ Uniform(0.88, 1.14)`.
-- [ ] Sample `transport_row_sy ~ Uniform(0.88, 1.14)`.
-- [ ] Sample `shufrep_dx ~ Uniform(-10, 10)`.
-- [ ] Sample `shufrep_dy ~ Uniform(-10, 10)`.
-- [ ] Sample `shufrep_sx ~ Uniform(0.88, 1.16)`.
-- [ ] Sample `shufrep_sy ~ Uniform(0.88, 1.16)`.
-- [ ] Sample `volume_dx ~ Uniform(-10, 10)`.
-- [ ] Sample `volume_dy ~ Uniform(-10, 10)`.
-- [ ] Sample `volume_sx ~ Uniform(0.85, 1.20)`.
-- [ ] Sample `volume_sy ~ Uniform(0.85, 1.20)`.
-- [ ] Sample `balance_dx ~ Uniform(-10, 10)`.
-- [ ] Sample `balance_dy ~ Uniform(-10, 10)`.
-- [ ] Sample `balance_sx ~ Uniform(0.85, 1.20)`.
-- [ ] Sample `balance_sy ~ Uniform(0.85, 1.20)`.
-- [ ] Sample `posbar_dx ~ Uniform(-12, 12)`.
-- [ ] Sample `posbar_dy ~ Uniform(-8, 8)`.
-- [ ] Sample `posbar_sx ~ Uniform(0.88, 1.18)`.
-- [ ] Sample `posbar_sy ~ Uniform(0.88, 1.12)`.
+- [x] Sample movement/scale modes for individual transport buttons: move, scalex, scaley, scalexy, and move+scale combinations.
+- [x] Sample movement/scale modes for shuffle/repeat/EQ/PL toggles independently.
+- [x] Sample movement/scale modes for volume, balance, posbar, EQ sliders, and playlist scrollbar.
+- [x] Fill each original transformed-control rect with the average of four outside edge pixels before drawing the transformed control.
 - [ ] Sample `eq_graph_dx ~ Uniform(-12, 12)`.
 - [ ] Sample `eq_graph_dy ~ Uniform(-12, 12)`.
 - [ ] Sample `eq_graph_sx ~ Uniform(0.88, 1.16)`.
 - [ ] Sample `eq_graph_sy ~ Uniform(0.88, 1.16)`.
-- [ ] Sample `eq_sliders_dx ~ Uniform(-16, 16)`.
-- [ ] Sample `eq_sliders_dy ~ Uniform(-16, 16)`.
-- [ ] Sample `eq_sliders_sx ~ Uniform(0.85, 1.20)`.
-- [ ] Sample `eq_sliders_sy ~ Uniform(0.85, 1.20)`.
 - [ ] Sample `playlist_text_dx ~ Uniform(-16, 16)`.
 - [ ] Sample `playlist_text_dy ~ Uniform(-16, 16)`.
 - [ ] Sample `playlist_text_sx ~ Uniform(0.88, 1.18)`.
 - [ ] Sample `playlist_text_sy ~ Uniform(0.88, 1.18)`.
-- [ ] Sample `playlist_scrollbar_dx ~ Uniform(-12, 12)`.
-- [ ] Sample `playlist_scrollbar_dy ~ Uniform(-12, 12)`.
-- [ ] Sample `playlist_scrollbar_sx ~ Uniform(0.85, 1.20)`.
-- [ ] Sample `playlist_scrollbar_sy ~ Uniform(0.85, 1.20)`.
 - [ ] Sample `playlist_bottom_dx ~ Uniform(-16, 16)`.
 - [ ] Sample `playlist_bottom_dy ~ Uniform(-16, 16)`.
 - [ ] Sample `playlist_bottom_sx ~ Uniform(0.85, 1.20)`.
@@ -794,6 +762,9 @@ data_v0/params/{skin_id}_{variant_id}.json
 - [ ] Sample each of `eq_bands[10] = Uniform(-12.0, 12.0)`.
 - [ ] Sample `playlist_scroll = Uniform(0.0, 1.0)`.
 - [ ] Sample `playlist_selected_row = RandomInt(0, 16)`.
+- [x] Render deterministic stub playlist song names.
+- [x] Render deterministic main-window histogram bars.
+- [x] Render visible seek progress in addition to the seek thumb.
 - [ ] Log state coverage counts per skin for pressed transport states, shuffle/repeat states, volume/balance/posbar positions, and EQ bands.
 - [x] Implement optional `--state-balanced` mode but keep it disabled by default in V0.
 - [x] Expose `--state-balanced` in both `cranamp-cli render-random` and `scripts/02_render_dataset.py`.
@@ -854,7 +825,7 @@ params_json
 
 - [x] Implement `scripts/04_check_dataset.py`.
 - [x] Verify every CSV path exists.
-- [x] Verify every view is `768x1280` RGB.
+- [x] Verify every view is `941x1672` RGB.
 - [x] Verify every rect file has exactly `80*5` float32 values.
 - [x] Verify every state file has exactly `32` float32 values.
 - [x] Verify every atlas is `1024x1024` RGB.
@@ -876,7 +847,7 @@ python scripts/04_check_dataset.py --data data_v0
 ## 16. Model 1: GeoNet80 task
 
 - [x] Implement `models/geonet80.py`.
-- [x] GeoNet80 input is `view image [B, 3, 1280, 768]`.
+- [x] GeoNet80 input is `view image [B, 3, 1672, 941]`.
 - [x] GeoNet80 output includes CenterNet-style heatmaps.
 - [x] GeoNet80 output includes width/height maps.
 - [x] GeoNet80 output includes offset maps.
@@ -890,7 +861,7 @@ python scripts/04_check_dataset.py --data data_v0
 
 ## 17. GeoNet80 exact architecture
 
-- [ ] Input tensor: `B x 3 x 1280 x 768`.
+- [ ] Input tensor: `B x 3 x 1672 x 941`.
 - [ ] Backbone: ResNet34 without classification head.
 - [ ] Use feature `C2: B x 64 x 320 x 192`, stride 4.
 - [ ] Use feature `C3: B x 128 x 160 x 96`, stride 8.
@@ -971,7 +942,7 @@ python scripts/04_check_dataset.py --data data_v0
 ## 20. GeoNet80 training augmentation
 
 - [ ] Apply geometric letterbox/pad augmentation before photometric augmentations with probability `p = 0.30`.
-- [ ] Letterbox augmentation creates a new `768x1280` canvas with dark/black padding, rescales the whole view into a random sub-rectangle, and updates rect labels accordingly.
+- [ ] Letterbox augmentation creates a new `941x1672` canvas with dark/black padding, rescales the whole view into a random sub-rectangle, and updates rect labels accordingly.
 - [ ] Letterbox content scale x sampled from `[0.80, 1.00]`.
 - [ ] Letterbox content scale y sampled from `[0.80, 1.00]`.
 - [ ] Letterbox paste x sampled uniformly from available horizontal padding.
@@ -1019,8 +990,8 @@ Training command:
 python train_geonet.py \
   --train data_v0/train.csv \
   --val data_v0/val.csv \
-  --image-h 1280 \
-  --image-w 768 \
+  --image-h 1672 \
+  --image-w 941 \
   --components 80 \
   --batch 4 \
   --grad-accum-steps 1 \
@@ -1381,7 +1352,7 @@ python train_slotnet.py \
 
 - [ ] Implement `infer_skin.py`.
 - [ ] Load arbitrary mockup input image.
-- [ ] Letterbox image to `768x1280`.
+- [ ] Letterbox image to `941x1672`.
 - [ ] Run GeoNet80 backbone/FPN and detection heads.
 - [ ] Decode rects `[80,5]` from GeoNet detection heads.
 - [ ] Derive EQ band rects 30-39 from predicted `eq_sliders_group` using the shared deterministic function.

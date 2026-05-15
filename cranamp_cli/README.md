@@ -22,8 +22,8 @@ Run a smoke render:
 ./cranamp_cli/cranamp-cli render-random \
   --skin-dir assets/default_skin \
   --seed 1 \
-  --canvas-w 768 \
-  --canvas-h 1280 \
+  --canvas-w 941 \
+  --canvas-h 1672 \
   --out-view /tmp/cranamp_view.png \
   --out-rects /tmp/cranamp_rects.f32 \
   --out-state /tmp/cranamp_state.f32 \

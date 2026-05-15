@@ -90,7 +90,7 @@ def check_sample_row(row: dict[str, str], profile) -> None:
         if not Path(row[key]).exists():
             raise FileNotFoundError(row[key])
     with Image.open(row["view_png"]) as view:
-        if view.mode != "RGB" or view.size != (768, 1280):
+        if view.mode != "RGB" or view.size != (941, 1672):
             raise ValueError(f"bad view for {row['skin_id']}: mode={view.mode} size={view.size}")
     with Image.open(row["visible_mask_png"]) as mask:
         if mask.mode != "L" or mask.size != (profile.canvas_w, profile.canvas_h):
