@@ -73,13 +73,131 @@ def slot_loss(
     return {"total": total, "rgb": l_rgb, "sobel": l_sobel, "special": l_special}
 
 
-def centernet_focal_loss(pred: torch.Tensor, target: torch.Tensor, valid_mask: torch.Tensor | None = None) -> torch.Tensor:
+def atlas_contrastive_loss(pred_rgb: torch.Tensor, target_rgb: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
+    """InfoNCE on downsampled atlas embeddings. Returns 0 for batch size < 2."""
+    B = pred_rgb.shape[0]
+    if B < 2:
+        return pred_rgb.sum() * 0.0
+    pred = F.interpolate(pred_rgb, size=(64, 64), mode="bilinear", align_corners=False)
+    targ = F.interpolate(target_rgb, size=(64, 64), mode="bilinear", align_corners=False)
+    pred = F.normalize(pred.flatten(1), dim=1)
+    targ = F.normalize(targ.flatten(1), dim=1)
+    logits = pred @ targ.t() / temperature
+    labels = torch.arange(B, device=pred.device)
+    return F.cross_entropy(logits, labels)
+
+
+def full_atlas_loss(
+    prediction: torch.Tensor,         # [B, 7, H, W] raw logits
+    target_rgb: torch.Tensor,         # [B, 3, H, W] in [0, 1]
+    atlas_mask: torch.Tensor,         # [B, 1, H, W] in {0, 1}
+    effective_mask: torch.Tensor,     # [B, 1, H, W] in [0, 1]
+    weight_map: torch.Tensor,         # [B, 1, H, W] per-slot loss weight
+    special_target: torch.Tensor,     # [B, H, W] long
+    special_mask: torch.Tensor,       # [B, 1, H, W] in {0, 1}
+    sobel_weight: float = 0.5,
+) -> dict[str, torch.Tensor]:
+    """Loss for SlotNetV3 over the full 1024x1024 atlas in one shot.
+
+    All slots are trained simultaneously in a single forward, weighted by the
+    per-pixel weight_map (atlas slot loss_weight x per-skin per-slot weight).
+    Mask normalization uses (effective_mask * weight_map).sum() so a sparse
+    big-area-padded slot contributes the same per-active-pixel gradient as a
+    small dense slot.
+    """
+    pred_rgb = prediction[:, 0:3].sigmoid()
+    special_logits = prediction[:, 3:7]
+
+    weighted_mask = effective_mask * weight_map  # [B, 1, H, W]
+    denom = weighted_mask.sum().clamp_min(1e-8)
+
+    abs_diff = (pred_rgb - target_rgb).abs()
+    l_rgb = (abs_diff * weighted_mask).sum() / (denom * pred_rgb.shape[1])
+
+    pred_edges = sobel_edges(pred_rgb)
+    target_edges = sobel_edges(target_rgb)
+    edge_mask = weighted_mask.repeat(1, pred_edges.shape[1], 1, 1)
+    l_sobel = ((pred_edges - target_edges).abs() * edge_mask).sum() / (
+        denom * pred_edges.shape[1] + 1e-8
+    )
+
+    # Special CE only where special_mask is active AND atlas_mask is active.
+    sp_active = (special_mask[:, 0] > 0.5) & (atlas_mask[:, 0] > 0.5)
+    if sp_active.any():
+        ce = F.cross_entropy(special_logits, special_target.long(), reduction="none")
+        l_special = ce[sp_active].mean()
+    else:
+        l_special = special_logits.sum() * 0.0
+
+    total = l_rgb + sobel_weight * l_sobel + l_special
+    return {"total": total, "rgb": l_rgb, "sobel": l_sobel, "special": l_special}
+
+
+def full_atlas_loss_v31(
+    prediction: torch.Tensor,
+    target_rgb: torch.Tensor,
+    atlas_mask: torch.Tensor,
+    effective_mask: torch.Tensor,
+    weight_map: torch.Tensor,
+    special_target: torch.Tensor,
+    special_mask: torch.Tensor,
+    sobel_weight: float = 2.0,
+    contrast_weight: float = 0.05,
+) -> dict[str, torch.Tensor]:
+    """V3.1 loss: full-atlas L1 + Sobel (visible-weighted) + special CE + contrastive."""
+    pred_rgb = prediction[:, 0:3].sigmoid()
+    special_logits = prediction[:, 3:7]
+
+    weighted_mask = effective_mask * weight_map
+    denom = weighted_mask.sum().clamp_min(1e-8)
+
+    abs_diff = (pred_rgb - target_rgb).abs()
+    l_rgb = (abs_diff * weighted_mask).sum() / (denom * pred_rgb.shape[1])
+
+    pred_edges = sobel_edges(pred_rgb)
+    target_edges = sobel_edges(target_rgb)
+    edge_mask = weighted_mask.repeat(1, pred_edges.shape[1], 1, 1)
+    l_sobel = ((pred_edges - target_edges).abs() * edge_mask).sum() / (
+        denom * pred_edges.shape[1] + 1e-8
+    )
+
+    sp_active = (special_mask[:, 0] > 0.5) & (atlas_mask[:, 0] > 0.5)
+    if sp_active.any():
+        ce = F.cross_entropy(special_logits, special_target.long(), reduction="none")
+        l_special = ce[sp_active].mean()
+    else:
+        l_special = special_logits.sum() * 0.0
+
+    l_contrast = atlas_contrastive_loss(pred_rgb, target_rgb)
+
+    total = l_rgb + sobel_weight * l_sobel + l_special + contrast_weight * l_contrast
+    return {
+        "total": total,
+        "rgb": l_rgb,
+        "sobel": l_sobel,
+        "special": l_special,
+        "contrast": l_contrast,
+    }
+
+
+def centernet_focal_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    valid_mask: torch.Tensor | None = None,
+    positives: torch.Tensor | None = None,
+) -> torch.Tensor:
     pred = pred.clamp(1e-6, 1.0 - 1e-6)
-    pos = target.eq(1.0)
-    neg = target.lt(1.0)
+    # Positives = floor-cell anchors (passed in via reg_mask), not target.eq(1.0).
+    # The Gaussian target rarely hits exactly 1.0 due to floor() discretization,
+    # so target.eq(1.0) zero-positives the loss and divides ~5M neg pixels by 1.
+    if positives is None:
+        positives = target.gt(0.99)
+    pos = positives.bool()
+    neg = ~pos
     if valid_mask is not None:
-        pos = pos & valid_mask.bool()
-        neg = neg & valid_mask.bool()
+        valid = valid_mask.bool()
+        pos = pos & valid
+        neg = neg & valid
     pos_loss = -((1.0 - pred) ** 2) * pred.log() * pos
     neg_loss = -((1.0 - target) ** 4) * (pred**2) * (1.0 - pred).log() * neg
     num_pos = pos.sum().clamp_min(1)

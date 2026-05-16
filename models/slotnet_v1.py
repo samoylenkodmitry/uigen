@@ -78,7 +78,7 @@ class SlotNetV1(nn.Module):
         state: torch.Tensor,
         slot_id: torch.Tensor,
         output_hw: tuple[int, int],
-        input_hw: tuple[int, int] = (1672, 941),
+        input_hw: tuple[int, int] = (1728, 960),
     ) -> dict[str, torch.Tensor]:
         crop, log_scale, valid = crop_view_regions(view, source_rect, output_hw, input_hw)
         conditioned = self.build_conditioned_input(crop, slot_id, source_rect, state, log_scale)

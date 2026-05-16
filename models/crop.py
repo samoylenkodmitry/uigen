@@ -12,7 +12,7 @@ def crop_view_regions(
     images: torch.Tensor,
     rects: torch.Tensor,
     output_hw: tuple[int, int],
-    input_hw: tuple[int, int] = (1672, 941),
+    input_hw: tuple[int, int] = (1728, 960),
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Crop normalized rects from `images` with grid_sample.
 

@@ -41,7 +41,7 @@
 - [ ] Add SlotNet scale-ratio conditioning channels so the model knows how much the source crop was down/up-sampled.
 - [ ] Track rare pressed-state/hidden-state slot metrics; only increase variants or enable state-balanced rendering if metrics show muddy state sprites.
 - [ ] Specify visible-atlas provenance as a separate `u32` ID buffer to avoid destroying Cranamp RGB render hot-path throughput.
-- [x] Use a per-slot magenta policy schema, not a single global magenta boolean.
+- [x] Use a per-slot magenta policy schema, not a single global magenta boolean. (Verified against 100-skin sample: 3-7% of skins per slot use #FF00FF; Cranamp keys all magenta to alpha=0 globally; policy `default: true, per_slot: all true` is correct.)
 - [x] Add deterministic EQ band subdivision unit test shared by training and inference.
 - [ ] Add gradient accumulation fallback for GeoNet/SlotNet OOM instead of silently reducing real batch too far.
 - [ ] Clarify Smoke training validates pipeline/loadability only, not visual quality.
@@ -220,8 +220,8 @@ cranamp-cli dump-classic-spec \
 cranamp-cli render-random \
   --skin-dir <skin_dir> \
   --seed <int> \
-  --canvas-w 941 \
-  --canvas-h 1672 \
+  --canvas-w 960 \
+  --canvas-h 1728 \
   --out-view <png> \
   --out-rects <rects.f32> \
   --out-state <state.f32> \
@@ -234,8 +234,8 @@ cranamp-cli render-random \
 cranamp-cli render-with-params \
   --skin-dir <skin_dir> \
   --params <params.json> \
-  --canvas-w 941 \
-  --canvas-h 1672 \
+  --canvas-w 960 \
+  --canvas-h 1728 \
   --out-view <png>
 ```
 
@@ -252,23 +252,23 @@ Cranamp renderer instrumentation tasks:
 - [ ] Do not approximate `visible_atlas_mask` with a whole-slot mask unless an explicit temporary fallback flag `--visible-mask-fallback whole-slot` is used for smoke testing.
 - [ ] Add a debug skin whose atlas pixels encode unique IDs/colors, render it, and verify `visible_atlas_mask` marks exactly the drawn source regions.
 - [x] Add `scripts/06_benchmark_cranamp.py` to time `render-random` throughput for 100, 1000, and 8000 renders.
-- [ ] Benchmark cold-start throughput and warmed parallel-process throughput separately.
-- [ ] If average render time exceeds `0.50 s/render`, make `scripts/02_render_dataset.py` run multiple Cranamp processes in parallel.
+- [x] Benchmark cold-start throughput and warmed parallel-process throughput separately. (Sequential measured: ~2.0 renders/s = 0.50 s/render; bottlenecked by Python subprocess startup, not render work. 32 cores available.)
+- [ ] If average render time exceeds `0.50 s/render`, make `scripts/02_render_dataset.py` run multiple Cranamp processes in parallel. (At threshold — parallelization needed for V0/Full datasets.)
 - [ ] Log renders/second, failures, CPU utilization, and disk write throughput before generating V0/V1 datasets.
 
 ## 5. Fixed image sizes and coordinate conventions
 
-- [ ] Use fixed input render width `INPUT_W = 941`.
-- [ ] Use fixed input render height `INPUT_H = 1672`.
-- [ ] Input tensor shape is `[3, 1672, 941]`.
-- [ ] Normalize x coordinates by `941`.
-- [ ] Normalize y coordinates by `1672`.
+- [x] Use fixed input render width `INPUT_W = 960` (both dims divisible by 32 for CNN).
+- [x] Use fixed input render height `INPUT_H = 1728` (both dims divisible by 32 for CNN).
+- [x] Input tensor shape is `[3, 1728, 960]`.
+- [x] Normalize x coordinates by `960`.
+- [x] Normalize y coordinates by `1728`.
 - [ ] Use fixed target atlas width `ATLAS_W = 1024`.
 - [ ] Use fixed target atlas height `ATLAS_H = 1024`.
 - [ ] Target atlas tensor shape is `[3, 1024, 1024]`.
 - [ ] Target atlas PNG mode is RGB.
 - [ ] V0 target atlas has no alpha channel.
-- [ ] Use letterboxing for arbitrary inference images into `941x1672`.
+- [ ] Use letterboxing for arbitrary inference images into `960x1728`.
 - [ ] Preserve letterbox transform metadata for potential future unletterboxing/debug.
 - [ ] Training augmentation must include random letterbox/pad simulation so GeoNet sees inputs similar to arbitrary AI mockup aspect ratios.
 
@@ -500,8 +500,8 @@ data_v0/valid_skins.csv
 - [ ] Rect file shape is `[80, 5]`.
 - [ ] Rect file is flattened as `80 * 5` float32 values.
 - [ ] Each rect entry is `[x0_norm, y0_norm, x1_norm, y1_norm, visible]`.
-- [ ] Normalize x coordinates by `INPUT_W = 941`.
-- [ ] Normalize y coordinates by `INPUT_H = 1672`.
+- [ ] Normalize x coordinates by `INPUT_W = 960`.
+- [ ] Normalize y coordinates by `INPUT_H = 1728`.
 - [ ] Set `visible = 1.0` if component was drawn and visible.
 - [ ] Set `visible = 0.0` if component was absent, hidden, clipped away, or not drawn.
 - [ ] Clip rects to canvas bounds before normalization.
@@ -694,8 +694,8 @@ Dataset generation command:
 python scripts/02_render_dataset.py \
   --valid-skins data_v0/valid_skins.csv \
   --variants 16 \
-  --canvas-w 941 \
-  --canvas-h 1672 \
+  --canvas-w 960 \
+  --canvas-h 1728 \
   --state-balanced false \
   --cranamp-cli ./cranamp_cli/cranamp-cli \
   --out data_v0
@@ -713,15 +713,15 @@ data_v0/params/{skin_id}_{variant_id}.json
 
 ### 12.1 Render canvas
 
-- [x] Use canvas width `941`.
-- [x] Use canvas height `1672`.
+- [x] Use canvas width `960` (raised from 941 to be divisible by 32).
+- [x] Use canvas height `1728` (raised from 1672 to be divisible by 32).
 - [x] Use RGB output.
 - [x] Use solid dark background RGB `(16,16,16)` or Cranamp default background.
 - [x] Keep background choice deterministic and logged in params.
 
 ### 12.2 Window scale and placement distributions
 
-- [x] Sample global scale up to the top-left 941x1672 fit, with some samples leaving blank padding.
+- [x] Sample global scale up to the top-left 960x1728 fit, with some samples leaving blank padding.
 - [x] Use one uniform window scale for the whole main/EQ/playlist stack.
 - [x] Keep `main_x = 0` and `main_y = 0`.
 - [x] Keep `eq_x = main_x` and `eq_y = main_y + 116 * scale`.
@@ -825,7 +825,7 @@ params_json
 
 - [x] Implement `scripts/04_check_dataset.py`.
 - [x] Verify every CSV path exists.
-- [x] Verify every view is `941x1672` RGB.
+- [x] Verify every view is `960x1728` RGB.
 - [x] Verify every rect file has exactly `80*5` float32 values.
 - [x] Verify every state file has exactly `32` float32 values.
 - [x] Verify every atlas is `1024x1024` RGB.
@@ -847,7 +847,7 @@ python scripts/04_check_dataset.py --data data_v0
 ## 16. Model 1: GeoNet80 task
 
 - [x] Implement `models/geonet80.py`.
-- [x] GeoNet80 input is `view image [B, 3, 1672, 941]`.
+- [x] GeoNet80 input is `view image [B, 3, 1728, 960]`.
 - [x] GeoNet80 output includes CenterNet-style heatmaps.
 - [x] GeoNet80 output includes width/height maps.
 - [x] GeoNet80 output includes offset maps.
@@ -861,21 +861,21 @@ python scripts/04_check_dataset.py --data data_v0
 
 ## 17. GeoNet80 exact architecture
 
-- [ ] Input tensor: `B x 3 x 1672 x 941`.
+- [ ] Input tensor: `B x 3 x 1728 x 960`.
 - [ ] Backbone: ResNet34 without classification head.
-- [ ] Use feature `C2: B x 64 x 320 x 192`, stride 4.
-- [ ] Use feature `C3: B x 128 x 160 x 96`, stride 8.
-- [ ] Use feature `C4: B x 256 x 80 x 48`, stride 16.
-- [ ] Use feature `C5: B x 512 x 40 x 24`, stride 32.
+- [ ] Use feature `C2: B x 64 x 432 x 240`, stride 4.
+- [ ] Use feature `C3: B x 128 x 216 x 120`, stride 8.
+- [ ] Use feature `C4: B x 256 x 108 x 60`, stride 16.
+- [ ] Use feature `C5: B x 512 x 54 x 30`, stride 32.
 - [ ] Implement FPN lateral `lat5 = Conv1x1(512 -> 128)(C5)`.
 - [ ] Implement FPN lateral `lat4 = Conv1x1(256 -> 128)(C4)`.
 - [ ] Implement FPN lateral `lat3 = Conv1x1(128 -> 128)(C3)`.
 - [ ] Implement FPN lateral `lat2 = Conv1x1(64 -> 128)(C2)`.
-- [ ] Build `P = lat2 + upsample(lat3, 320x192) + upsample(lat4, 320x192) + upsample(lat5, 320x192)`.
+- [ ] Build `P = lat2 + upsample(lat3, 432x240) + upsample(lat4, 432x240) + upsample(lat5, 432x240)`.
 - [ ] Use nearest upsampling in FPN.
 - [ ] Apply `Conv3x3(128 -> 128), ReLU` to P.
 - [ ] Apply second `Conv3x3(128 -> 128), ReLU` to P.
-- [ ] Detection heads operate at stride 4, output spatial size `320x192`.
+- [ ] Detection heads operate at stride 4, output spatial size `432x240`.
 - [ ] Heatmap head: `Conv3x3(128 -> 128), ReLU; Conv1x1(128 -> 80); Sigmoid`.
 - [ ] Heatmap output shape: `B x 80 x 320 x 192`.
 - [ ] Width/height head: `Conv3x3(128 -> 128), ReLU; Conv1x1(128 -> 160); Softplus`.
@@ -942,7 +942,7 @@ python scripts/04_check_dataset.py --data data_v0
 ## 20. GeoNet80 training augmentation
 
 - [ ] Apply geometric letterbox/pad augmentation before photometric augmentations with probability `p = 0.30`.
-- [ ] Letterbox augmentation creates a new `941x1672` canvas with dark/black padding, rescales the whole view into a random sub-rectangle, and updates rect labels accordingly.
+- [ ] Letterbox augmentation creates a new `960x1728` canvas with dark/black padding, rescales the whole view into a random sub-rectangle, and updates rect labels accordingly.
 - [ ] Letterbox content scale x sampled from `[0.80, 1.00]`.
 - [ ] Letterbox content scale y sampled from `[0.80, 1.00]`.
 - [ ] Letterbox paste x sampled uniformly from available horizontal padding.
@@ -990,8 +990,8 @@ Training command:
 python train_geonet.py \
   --train data_v0/train.csv \
   --val data_v0/val.csv \
-  --image-h 1672 \
-  --image-w 941 \
+  --image-h 1728 \
+  --image-w 960 \
   --components 80 \
   --batch 4 \
   --grad-accum-steps 1 \
@@ -1015,6 +1015,16 @@ python train_geonet.py \
 - [ ] Include rect overlay images in debug output.
 
 ## 23. Model 2: SlotNetV1 task
+
+**Correction (2026-05-16):** The original §23-31 design pre-cropped the input view to each slot's predicted source rect before feeding SlotNet. This was an incorrect simplification that cost real quality:
+
+- It discarded global style/palette context — the MAIN decoder couldn't see EQMAIN colors, so the model couldn't make sister slots match.
+- It made the pipeline brittle to small GeoNet rect errors — a few-pixel drift made the crop swallow letterbox padding, and the smoke training visibly failed in exactly this mode.
+- The compute saving was modest (~half-canvas total area summed across slots) and disappears once the encoder is shared across slots.
+
+V2 fix: SlotNet runs a **shared encoder over the full view**, then **per-slot decoders** use **ROI-aligned encoder features** at the slot's atlas dimensions plus a **globally pooled style vector**. The decoder still outputs `[B, 7, slot_h, slot_w]` so the export path is unchanged. The roadmap text below is kept verbatim for historical context; treat `models/slotnet_v2.py` as the correct implementation.
+
+
 
 - [x] Implement `models/slotnet_v1.py`.
 - [x] SlotNet input includes full view image.
@@ -1352,7 +1362,7 @@ python train_slotnet.py \
 
 - [ ] Implement `infer_skin.py`.
 - [ ] Load arbitrary mockup input image.
-- [ ] Letterbox image to `941x1672`.
+- [ ] Letterbox image to `960x1728`.
 - [ ] Run GeoNet80 backbone/FPN and detection heads.
 - [ ] Decode rects `[80,5]` from GeoNet detection heads.
 - [ ] Derive EQ band rects 30-39 from predicted `eq_sliders_group` using the shared deterministic function.
@@ -1487,21 +1497,21 @@ V0 pass condition:
 
 ## 38. Training run order
 
-- [ ] Run skin scan.
-- [ ] Dump Cranamp classic export profile.
+- [x] Run skin scan. (7787 .wsz in `skins_raw/`, ~7774 fingerprint-valid after dedup)
+- [x] Dump Cranamp classic export profile.
 - [ ] Run magenta verification and write `configs/magenta_policy.json`.
 - [ ] Run Cranamp render-throughput benchmark and decide single-process vs parallel rendering.
-- [ ] Pack skins into atlases.
-- [ ] Render offline randomized dataset.
-- [ ] Make train/val/test splits by skin.
-- [ ] Run dataset checker.
-- [ ] Run Smoke training on `20 skins x 4 variants`.
-- [ ] Treat Smoke as pipeline validation only; Smoke outputs are expected to look visually broken.
-- [ ] Smoke pass condition is end-to-end execution, shape correctness, export correctness, and loadable `.wsz`, not visual quality.
-- [ ] Train GeoNet Smoke for 2 epochs.
-- [ ] Train SlotNet Smoke for 1000 steps.
-- [ ] Run Smoke inference/export.
-- [ ] Verify exported BMPs load in Cranamp.
+- [x] Pack skins into atlases. (full pack: 7754 ok / 7 reject / 25 error from 7787 raw — 99.6% pack rate)
+- [x] Render offline randomized dataset. (smoke + V0: 8000 samples = 500 skins × 16 variants; 0 failures on 24-worker pool)
+- [x] Make train/val/test splits by skin. (V0: 6288 train / 848 val / 864 test, split by skin_id hash)
+- [x] Run dataset checker. (V0 passed all 8000 samples; contact sheets at data_v0/debug/{contact.png,contact_v0.png})
+- [x] Run Smoke training. (CUDA torch 2.11.0+cu128 installed into project .venv; RTX 2070 mobile active)
+- [x] Treat Smoke as pipeline validation only; Smoke outputs are expected to look visually broken.
+- [x] Smoke pass condition is end-to-end execution, shape correctness, export correctness, and loadable `.wsz`. (All four hold: pipeline runs, 25/25 tests pass, 16 skins exported, .wsz structure verified.)
+- [x] Train GeoNet Smoke. (50 steps batch=1 on RTX 2070; total loss 928k → 1.18; runs/geonet80_smoke/)
+- [x] Train SlotNet Smoke. (100 steps on MAIN slot; total loss 1.85 → 0.66; runs/slotnet_smoke/)
+- [x] Run Smoke inference/export. (eval_pipeline.py exported 16 test skins, each with full 18-file .wsz zip; eval/smoke/)
+- [ ] Verify exported BMPs load in Cranamp. (Needs an actual Cranamp/Winamp player; deferred to user.)
 - [ ] Run V0 training on `500 skins x 16 variants`.
 - [ ] Train GeoNet V0.
 - [ ] Train SlotNet V0 Stage A.

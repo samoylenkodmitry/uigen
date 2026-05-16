@@ -13,8 +13,8 @@ def main() -> int:
     parser.add_argument("--cranamp-cli", default="cranamp_cli/cranamp-cli")
     parser.add_argument("--skin-dir", default="assets/default_skin")
     parser.add_argument("--renders", type=int, nargs="+", default=[100])
-    parser.add_argument("--canvas-w", type=int, default=941)
-    parser.add_argument("--canvas-h", type=int, default=1672)
+    parser.add_argument("--canvas-w", type=int, default=960)
+    parser.add_argument("--canvas-h", type=int, default=1728)
     args = parser.parse_args()
 
     for render_count in args.renders:

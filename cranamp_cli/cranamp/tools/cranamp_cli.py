@@ -18,7 +18,7 @@ from atlas_ai.rects import derive_eq_band_rects, encode_rect
 from atlas_ai.skins import load_default_assets, load_skin_assets, normalize_name
 
 
-CANVAS_DEFAULT = (941, 1672)
+CANVAS_DEFAULT = (960, 1728)
 ATLAS_PROFILE = REPO_ROOT / "configs/atlas_v1.json"
 EXPORT_PROFILE = REPO_ROOT / "configs/export_profile_classic.json"
 DEFAULT_SKIN = REPO_ROOT / "assets/default_skin"
@@ -163,13 +163,72 @@ class Renderer:
         ImageDraw.Draw(self.canvas).rectangle([x0, y0, x1 - 1, y1 - 1], fill=avg)
 
 
+_ARTIST_POOL = [
+    "Cranamp", "Night Bus", "Small Grid", "Frame Step", "Raster Kids", "Hidden Tab",
+    "Null Track", "Palette Lab", "Mono Deck", "Pixel Sort", "Old Skin", "Sample Bus",
+    "Track Mask", "Synth Log", "Locator", "Blue Metal", "Checksum", "Final Slot",
+    "Quiet Engine", "Vector Field", "Buffer Boys", "Loop Theory", "Phase Lock", "Glitch Salon",
+    "Stride Mode", "Dither", "FFT Choir", "Saturated", "Skyfade", "808 Garden", "Edge Case",
+    "Static Bloom", "Halftone", "Modal Crash", "Tile Pump", "Rasterizer", "Render Boys",
+    "Voxel Cult", "Trace Bus", "Lo Bit", "Hi Bit", "Subpixel", "Anti Alias", "Bitplane",
+    "Magenta Key", "Alpha Crew", "RGB Drift", "Atlas Five", "Reseed", "Cold Slot",
+]
+_TITLE_POOL = [
+    "Cold Start", "Status Line", "Blue Window", "Seek Position", "Button State",
+    "Equalized", "Stub Name", "Gamma Drift", "Stereo Flag", "List Mode", "Footer Menu",
+    "Render Pass", "Visible Atlas", "Histogram", "Top Left", "Playlist Row", "Replay",
+    "Rect Label", "Repaint", "Pressed", "Released", "Half Step", "Quarter Note",
+    "Beta Slider", "Margin Pull", "Drag State", "Drop Frame", "Dead Pixel", "Sprite Tear",
+    "Init Boot", "Long Press", "Tap Hold", "Side Channel", "Mono Mix", "Pan Right",
+    "Pan Left", "Track Index", "Scrollbar", "Toggle On", "Toggle Off", "Auto EQ",
+    "Manual Gain", "Soft Knee", "Hard Clip", "Click Free", "Limit Push", "Tail Out",
+    "Cue In", "Fade Curve", "Repeat One", "Shuffle Bag",
+]
+_GLYPH_GARBLE = "!@#$%^&*()_+-=[]{};:,.<>/?\\|~`"
+
+
+def _random_song(rng: random.Random) -> str:
+    """Generate a "NN. Artist - Title M:SS" line with mild perturbation."""
+    artist = rng.choice(_ARTIST_POOL)
+    title = rng.choice(_TITLE_POOL)
+    if rng.random() < 0.15:
+        # Extra suffix on title (Remix/Live/Demo/Edit/etc.).
+        title = title + " (" + rng.choice(["Remix", "Live", "Demo", "Edit", "Reprise", "vJ", "B-Side"]) + ")"
+    if rng.random() < 0.08:
+        # Light glyph garble — simulates imagegen mistyped chars.
+        chars = list(title)
+        for i in rng.sample(range(len(chars)), min(2, len(chars))):
+            chars[i] = rng.choice(_GLYPH_GARBLE)
+        title = "".join(chars)
+    minutes = rng.randint(0, 9)
+    seconds = rng.randint(0, 59)
+    duration = f"{minutes}:{seconds:02d}"
+    return f"{artist} - {title} {duration}"
+
+
+def _random_playlist_entries(rng: random.Random) -> list[str]:
+    n = rng.randint(10, 22)
+    entries = []
+    for idx in range(n):
+        if rng.random() < 0.04:
+            # Occasionally a malformed/short line — drop the number prefix or duration.
+            line = _random_song(rng).split(" - ", 1)[-1]
+        elif rng.random() < 0.04:
+            # Very long title gets truncated by the renderer's [:38] clip — fine.
+            line = f"{idx + 1:02d}. " + _random_song(rng) + " " + _random_song(rng)
+        else:
+            line = f"{idx + 1:02d}. {_random_song(rng)}"
+        entries.append(line)
+    return entries
+
+
 def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -> dict:
     rng = random.Random(seed)
     stack_units_h = 116 + 116 + 261
     fit_scale = min(canvas_w / 275, canvas_h / stack_units_h)
     max_scale = min(3.4, fit_scale)
-    min_scale = min(2.0, max_scale)
-    if max_scale > min_scale and rng.random() < 0.35:
+    min_scale = min(2.8, max_scale)
+    if max_scale > min_scale and rng.random() < 0.55:
         scale = round(max_scale, 4)
     elif max_scale > min_scale:
         scale = round(rng.uniform(min_scale, max_scale), 4)
@@ -218,31 +277,52 @@ def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -
             "sy": scale_value(sy) if scale_y else 1.0,
         }
 
-    playlist_entries = [
-        f"{idx + 1:02d}. {artist} - {title} {duration}"
-        for idx, (artist, title, duration) in enumerate(
-            [
-                ("Cranamp", "Cold Start", "3:11"),
-                ("Night Bus", "Status Line", "4:02"),
-                ("Small Grid", "Blue Window", "2:49"),
-                ("Frame Step", "Seek Position", "5:18"),
-                ("Raster Kids", "Button State", "3:36"),
-                ("Hidden Tab", "Equalized", "4:44"),
-                ("Null Track", "Stub Name", "2:55"),
-                ("Palette Lab", "Gamma Drift", "3:28"),
-                ("Mono Deck", "Stereo Flag", "4:17"),
-                ("Pixel Sort", "List Mode", "3:05"),
-                ("Old Skin", "Footer Menu", "2:41"),
-                ("Sample Bus", "Render Pass", "5:01"),
-                ("Track Mask", "Visible Atlas", "3:52"),
-                ("Synth Log", "Histogram", "4:10"),
-                ("Locator", "Top Left", "3:33"),
-                ("Blue Metal", "Playlist Row", "2:58"),
-                ("Checksum", "Replay", "3:47"),
-                ("Final Slot", "Rect Label", "4:25"),
-            ]
-        )
-    ]
+    playlist_entries = _random_playlist_entries(rng)
+
+    component_transforms = {
+        "playback_indicator": transform(6, 6, 0.18, 0.18),
+        "mono_stereo": transform(6, 6, 0.18, 0.18),
+        "posbar": transform(5, 5, 0.16, 0.16),
+        "transport": transform(5, 5, 0.16, 0.16),
+        "transport_prev": transform(6, 6, 0.18, 0.18),
+        "transport_play": transform(6, 6, 0.18, 0.18),
+        "transport_pause": transform(6, 6, 0.18, 0.18),
+        "transport_stop": transform(6, 6, 0.18, 0.18),
+        "transport_next": transform(6, 6, 0.18, 0.18),
+        "transport_eject": transform(6, 6, 0.18, 0.18),
+        "volume": transform(5, 5, 0.16, 0.16),
+        "balance": transform(5, 5, 0.16, 0.16),
+        "shufrep": transform(6, 6, 0.18, 0.18),
+        "shuffle": transform(6, 6, 0.18, 0.18),
+        "repeat": transform(6, 6, 0.18, 0.18),
+        "eq_toggle": transform(6, 6, 0.18, 0.18),
+        "pl_toggle": transform(6, 6, 0.18, 0.18),
+        "eq_sliders": transform(8, 8, 0.22, 0.22),
+        "playlist_scrollbar": transform(8, 8, 0.22, 0.22),
+    }
+
+    # Group mode: with some probability, drop the per-member transforms so the
+    # renderer falls back to the parent group transform and members shift as one.
+    groups = {
+        "transport": ["transport_prev", "transport_play", "transport_pause",
+                      "transport_stop", "transport_next", "transport_eject"],
+        "shufrep": ["shuffle", "repeat", "eq_toggle", "pl_toggle"],
+    }
+    group_modes = {}
+    for group_name, members in groups.items():
+        in_group_mode = rng.random() < 0.35
+        group_modes[group_name] = in_group_mode
+        if in_group_mode:
+            for member in members:
+                component_transforms.pop(member, None)
+
+    window_scales = {
+        "main": round(rng.uniform(0.94, 1.10), 3),
+        "eq": round(rng.uniform(0.94, 1.10), 3),
+        "playlist": round(rng.uniform(0.94, 1.10), 3),
+    }
+    eq_y = main_y + int(round(116 * scale * window_scales["main"]))
+    playlist_y = eq_y + int(round(116 * scale * window_scales["eq"]))
 
     return {
         "schema": "cranamp_cli_renderer_v3",
@@ -252,30 +332,12 @@ def rand_params(seed: int, canvas_w: int, canvas_h: int, state_balanced: bool) -
         "scale": scale,
         "windows": {
             "main": [main_x, main_y],
-            "eq": [main_x, main_y + int(116 * scale)],
-            "playlist": [main_x, main_y + int((116 + 116) * scale)],
+            "eq": [main_x, eq_y],
+            "playlist": [main_x, playlist_y],
         },
-        "component_transforms": {
-            "playback_indicator": transform(12, 8, 0.32, 0.32),
-            "mono_stereo": transform(14, 8, 0.30, 0.30),
-            "posbar": transform(22, 10, 0.34, 0.42),
-            "transport": transform(12, 12, 0.34, 0.34),
-            "transport_prev": transform(10, 12, 0.34, 0.34),
-            "transport_play": transform(14, 12, 0.34, 0.34),
-            "transport_pause": transform(14, 12, 0.34, 0.34),
-            "transport_stop": transform(14, 12, 0.34, 0.34),
-            "transport_next": transform(14, 12, 0.34, 0.34),
-            "transport_eject": transform(14, 12, 0.34, 0.34),
-            "volume": transform(16, 10, 0.40, 0.40),
-            "balance": transform(16, 10, 0.40, 0.40),
-            "shufrep": transform(18, 14, 0.40, 0.40),
-            "shuffle": transform(18, 14, 0.40, 0.40),
-            "repeat": transform(18, 14, 0.40, 0.40),
-            "eq_toggle": transform(18, 14, 0.40, 0.40),
-            "pl_toggle": transform(18, 14, 0.40, 0.40),
-            "eq_sliders": transform(12, 14, 0.30, 0.35),
-            "playlist_scrollbar": transform(4, 18, 0.18, 0.28),
-        },
+        "window_scales": window_scales,
+        "component_transforms": component_transforms,
+        "group_modes": group_modes,
         "playlist_entries": playlist_entries,
         "state": {
             "pressed_transport_button": pressed,
@@ -724,13 +786,72 @@ def render_playlist(renderer: Renderer, params: dict) -> None:
         renderer.mark_rect(comp_id, (*scaled_xy(origin, (rect[0], rect[1]), scale), rect[2], rect[3]), scale)
 
 
+def _render_window_pass(
+    renderer: Renderer,
+    render_fn,
+    params: dict,
+    window_name: str,
+    final_origin: tuple[int, int],
+    window_sy: float,
+    canvas_w: int,
+    canvas_h: int,
+) -> None:
+    """Render one window onto a transparent sub-canvas with its origin at (0,0),
+    vertically stretch it by window_sy, then composite at final_origin on the
+    real canvas. Rects emitted during the pass are remapped: y_norm becomes
+    final_origin_y/canvas_h + y_norm_sub * window_sy."""
+    sub_canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    saved_canvas = renderer.canvas
+    rects_before = renderer.rects.copy()
+
+    sub_params = {**params, "windows": {**params["windows"], window_name: [0, 0]}}
+    renderer.canvas = sub_canvas
+    render_fn(renderer, sub_params)
+    renderer.canvas = saved_canvas
+
+    emitted_mask = np.any(renderer.rects != rects_before, axis=1)
+    rects_local = renderer.rects.copy()
+    renderer.rects[:] = rects_before  # we'll re-write transformed rects below
+
+    if abs(window_sy - 1.0) > 1e-6:
+        stretched_h = max(1, int(round(canvas_h * window_sy)))
+        stretched = sub_canvas.resize((canvas_w, stretched_h), Image.Resampling.BILINEAR)
+    else:
+        stretched = sub_canvas
+
+    ox, oy = final_origin
+    renderer.canvas.alpha_composite(stretched, (int(ox), int(oy)))
+
+    oy_norm = oy / canvas_h
+    for cid in np.where(emitted_mask)[0]:
+        x0n, y0n, x1n, y1n, vis = rects_local[cid]
+        if vis <= 0:
+            renderer.rects[cid] = rects_local[cid]
+            continue
+        y0n_new = oy_norm + y0n * window_sy
+        y1n_new = oy_norm + y1n * window_sy
+        y0n_new = max(0.0, min(1.0, y0n_new))
+        y1n_new = max(0.0, min(1.0, y1n_new))
+        if y1n_new <= y0n_new:
+            renderer.rects[cid] = (0.0, 0.0, 0.0, 0.0, 0.0)
+        else:
+            renderer.rects[cid] = (x0n, y0n_new, x1n, y1n_new, vis)
+
+
 def render_with_params(skin_source: Path, params: dict, canvas_w: int | None = None, canvas_h: int | None = None) -> Renderer:
     canvas_w = canvas_w or int(params.get("canvas_w", CANVAS_DEFAULT[0]))
     canvas_h = canvas_h or int(params.get("canvas_h", CANVAS_DEFAULT[1]))
     renderer = Renderer(skin_source, canvas_w, canvas_h)
-    render_main(renderer, params)
-    render_eq(renderer, params)
-    render_playlist(renderer, params)
+
+    window_scales = params.get("window_scales", {"main": 1.0, "eq": 1.0, "playlist": 1.0})
+    windows = params["windows"]
+    render_passes = [
+        ("main", render_main, tuple(windows["main"]), float(window_scales.get("main", 1.0))),
+        ("eq", render_eq, tuple(windows["eq"]), float(window_scales.get("eq", 1.0))),
+        ("playlist", render_playlist, tuple(windows["playlist"]), float(window_scales.get("playlist", 1.0))),
+    ]
+    for name, fn, final_origin, sy in render_passes:
+        _render_window_pass(renderer, fn, params, name, final_origin, sy, canvas_w, canvas_h)
 
     state = params["state"]
     renderer.state[0] = (state["pressed_transport_button"] + 1) / 6.0

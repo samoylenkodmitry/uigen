@@ -37,9 +37,9 @@ def test_cranamp_cli_render_random_outputs_replayable_dataset_files(tmp_path):
             "--seed",
             "123",
             "--canvas-w",
-            "941",
+            "960",
             "--canvas-h",
-            "1672",
+            "1728",
             "--out-view",
             str(view),
             "--out-rects",
@@ -65,9 +65,9 @@ def test_cranamp_cli_render_random_outputs_replayable_dataset_files(tmp_path):
             "--params",
             str(params),
             "--canvas-w",
-            "941",
+            "960",
             "--canvas-h",
-            "1672",
+            "1728",
             "--out-view",
             str(replay),
         ],
@@ -77,7 +77,7 @@ def test_cranamp_cli_render_random_outputs_replayable_dataset_files(tmp_path):
     rendered_params = json.loads(params.read_text(encoding="utf-8"))
     with Image.open(view) as image:
         assert image.mode == "RGB"
-        assert image.size == (941, 1672)
+        assert image.size == (960, 1728)
         pl_x, pl_y = rendered_params["windows"]["playlist"]
         scale = rendered_params["scale"]
         bottom_y = 261 - 38
@@ -121,12 +121,18 @@ def test_cranamp_cli_render_random_outputs_replayable_dataset_files(tmp_path):
     playlist = rendered_params["windows"]["playlist"]
     assert main == [0, 0]
     assert main[0] == eq[0] == playlist[0]
-    assert eq[1] == main[1] + int(116 * rendered_params["scale"])
-    assert playlist[1] == main[1] + int((116 + 116) * rendered_params["scale"])
+    window_scales = rendered_params["window_scales"]
+    main_sy = float(window_scales["main"])
+    eq_sy = float(window_scales["eq"])
+    assert eq[1] == main[1] + int(round(116 * rendered_params["scale"] * main_sy))
+    assert playlist[1] == eq[1] + int(round(116 * rendered_params["scale"] * eq_sy))
     transforms = rendered_params["component_transforms"]
-    assert {"transport_prev", "transport_play", "posbar", "volume", "balance", "eq_sliders"} <= transforms.keys()
+    assert {"posbar", "volume", "balance", "eq_sliders"} <= transforms.keys()
+    # transport_*/shufrep group-mode may drop per-member transforms; require at least one transport_* OR a transport group.
+    has_transport = any(k.startswith("transport") for k in transforms.keys())
+    assert has_transport
     assert any(t["dx"] or t["dy"] or t["sx"] != 1.0 or t["sy"] != 1.0 for t in transforms.values())
     assert {t["mode"] for t in transforms.values()} - {"identity"}
-    assert len(rendered_params["playlist_entries"]) >= 18
+    assert len(rendered_params["playlist_entries"]) >= 10
     assert len(rendered_params["state"]["histogram"]) == 16
     assert view.read_bytes() == replay.read_bytes()

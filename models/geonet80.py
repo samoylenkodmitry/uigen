@@ -166,7 +166,7 @@ def build_geonet_targets(
 
 
 def geonet_loss(outputs: dict[str, torch.Tensor], targets: dict[str, torch.Tensor], state_target: torch.Tensor) -> dict[str, torch.Tensor]:
-    center = centernet_focal_loss(outputs["heatmap"], targets["heatmap"], targets["valid_heatmap"])
+    center = centernet_focal_loss(outputs["heatmap"], targets["heatmap"], targets["valid_heatmap"], positives=targets["reg_mask"])
     mask = targets["reg_mask"].repeat_interleave(2, dim=1)
     wh = F.smooth_l1_loss(outputs["wh"][mask], targets["wh"][mask]) if mask.any() else outputs["wh"].sum() * 0.0
     off = F.smooth_l1_loss(outputs["offset"][mask], targets["offset"][mask]) if mask.any() else outputs["offset"].sum() * 0.0
