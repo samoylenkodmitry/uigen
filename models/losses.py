@@ -191,7 +191,14 @@ def full_atlas_loss_v31(
     else:
         l_special = special_logits.sum() * 0.0
 
-    l_contrast = atlas_contrastive_loss(pred_rgb, target_rgb)
+    # Skip the contrastive computation entirely when its weight is zero --
+    # the per-step torch.unique over a full 1024^2 target tensor is
+    # expensive enough to matter over a 20k-step run, and the result is
+    # multiplied by zero anyway.
+    if contrast_weight > 0:
+        l_contrast = atlas_contrastive_loss(pred_rgb, target_rgb)
+    else:
+        l_contrast = pred_rgb.sum() * 0.0
 
     total = l_rgb + sobel_weight * l_sobel + l_special + contrast_weight * l_contrast
     return {
