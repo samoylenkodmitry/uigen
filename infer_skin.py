@@ -35,23 +35,35 @@ from models.slotnet_v31 import SlotNetV31
 from models.slotnet_v32 import SlotNetV32
 
 
-def detect_slotnet_model(ckpt_path: Path) -> str:
-    """Return 'v31' or 'v32' by peeking at the checkpoint's tensor keys.
+def detect_slotnet_config(ckpt_path: Path) -> tuple[str, int]:
+    """Return (model_version, base_channels) by inspecting checkpoint tensors.
 
     V3.2 checkpoints include `observed_head.*` and `residual_enabled_mask`;
-    V3.1 does not. Used so a single inference path handles both versions
-    without the user having to remember which model produced the checkpoint.
+    V3.1 does not. The base_channels count is recovered from the first
+    encoder conv: `enc1.0.weight` has shape `[base_channels, 3, 3, 3]`.
+
+    Both pieces of info are required for a strict checkpoint load -- if
+    the user trained with `--base-channels 16` but inference instantiates
+    with the default 24, the load fails with a shape mismatch. Auto-
+    detection makes the inference path robust to either training setting.
     """
     try:
         from safetensors.torch import safe_open
         with safe_open(str(ckpt_path), framework="pt", device="cpu") as f:
-            keys = set(f.keys())
+            keys = list(f.keys())
+            base_channels = int(f.get_tensor("enc1.0.weight").shape[0])
     except Exception:
         state = torch.load(str(ckpt_path), map_location="cpu")
-        keys = set(state.keys())
+        keys = list(state.keys())
+        base_channels = int(state["enc1.0.weight"].shape[0])
     if any(k.startswith("observed_head") or k == "residual_enabled_mask" for k in keys):
-        return "v32"
-    return "v31"
+        return "v32", base_channels
+    return "v31", base_channels
+
+
+def detect_slotnet_model(ckpt_path: Path) -> str:
+    """Backwards-compat wrapper that returns only the model version."""
+    return detect_slotnet_config(ckpt_path)[0]
 
 INPUT_H = 1728
 INPUT_W = 960
@@ -147,7 +159,8 @@ def main() -> int:
     parser.add_argument("--default-skin", default="assets/default_skin")
     parser.add_argument("--geonet-base-channels", type=int, default=32)
     parser.add_argument("--geonet-fpn-channels", type=int, default=96)
-    parser.add_argument("--slotnet-base-channels", type=int, default=24)
+    parser.add_argument("--slotnet-base-channels", type=int, default=None,
+                        help="Override SlotNet base_channels. Auto-detected from checkpoint shape if omitted.")
     parser.add_argument("--slotnet-model", choices=["v31", "v32"], default=None,
                         help="SlotNet variant. Auto-detected from checkpoint if omitted.")
     parser.add_argument("--out", required=True)
@@ -184,16 +197,20 @@ def main() -> int:
     draw_rect_overlay(canvas, rects.cpu().numpy(), out / "rects_overlay.png")
 
     # SlotNetV3.1/V3.2: full-atlas inference with default-atlas prior + layout
-    # conditioning. The model variant is auto-detected from the checkpoint's
-    # tensor keys -- V3.2 has `observed_head.*` and `residual_enabled_mask`.
+    # conditioning. Both the model variant AND base_channels are auto-detected
+    # from the checkpoint -- V3.2 has `observed_head.*`, and base_channels is
+    # recovered from `enc1.0.weight.shape[0]`. CLI flags override.
     default_atlas = pack_default_atlas_tensor(args.default_skin, atlas_profile).to(device)
-    requested_model = args.slotnet_model or detect_slotnet_model(Path(args.slotnet))
+    detected_model, detected_base = detect_slotnet_config(Path(args.slotnet))
+    requested_model = args.slotnet_model or detected_model
+    requested_base = args.slotnet_base_channels if args.slotnet_base_channels is not None else detected_base
     if requested_model == "v32":
-        slotnet = SlotNetV32(atlas_profile=atlas_profile, default_atlas=default_atlas, base_channels=args.slotnet_base_channels).to(device)
+        slotnet = SlotNetV32(atlas_profile=atlas_profile, default_atlas=default_atlas, base_channels=requested_base).to(device)
     elif requested_model == "v31":
-        slotnet = SlotNetV31(atlas_profile=atlas_profile, default_atlas=default_atlas, base_channels=args.slotnet_base_channels).to(device)
+        slotnet = SlotNetV31(atlas_profile=atlas_profile, default_atlas=default_atlas, base_channels=requested_base).to(device)
     else:
         raise SystemExit(f"unknown --slotnet-model {requested_model!r}; expected 'v31' or 'v32'")
+    print(f"  slotnet: model={requested_model} base_channels={requested_base}")
     load_checkpoint(slotnet, Path(args.slotnet))
     slotnet.eval()
     with torch.no_grad():

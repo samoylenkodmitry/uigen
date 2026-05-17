@@ -74,17 +74,40 @@ def slot_loss(
 
 
 def atlas_contrastive_loss(pred_rgb: torch.Tensor, target_rgb: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
-    """InfoNCE on downsampled atlas embeddings. Returns 0 for batch size < 2."""
+    """Supervised contrastive (InfoNCE) on downsampled atlas embeddings.
+
+    Anti-collapse signal: pred[i] should be closer to its own target[i] than
+    to other targets in the batch. But variants of the SAME skin share the
+    same atlas target -- treating them as negatives would penalize the model
+    for what is actually correct. So we group rows by target_rgb equality
+    via torch.unique and treat same-group rows as POSITIVES (supervised
+    contrastive). Same-group cells go in the numerator AND the denominator.
+
+    Returns 0 when batch_size < 2 or when all rows share the same group.
+    """
     B = pred_rgb.shape[0]
     if B < 2:
         return pred_rgb.sum() * 0.0
+    # Group batch rows by per-pixel target equality. Two rows in the same
+    # group share the same atlas target (e.g. variants of one skin).
+    flat_targets = target_rgb.detach().reshape(B, -1)
+    _, group_ids = torch.unique(flat_targets, dim=0, return_inverse=True)
+    if int(group_ids.unique().numel()) == 1:
+        # Degenerate: all rows are the same skin; nothing to contrast.
+        return pred_rgb.sum() * 0.0
+
     pred = F.interpolate(pred_rgb, size=(64, 64), mode="bilinear", align_corners=False)
     targ = F.interpolate(target_rgb, size=(64, 64), mode="bilinear", align_corners=False)
     pred = F.normalize(pred.flatten(1), dim=1)
     targ = F.normalize(targ.flatten(1), dim=1)
-    logits = pred @ targ.t() / temperature
-    labels = torch.arange(B, device=pred.device)
-    return F.cross_entropy(logits, labels)
+    logits = pred @ targ.t() / temperature  # [B, B]
+    positive_mask = (group_ids[:, None] == group_ids[None, :])  # [B, B] bool
+    log_probs = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+    num_pos = positive_mask.sum(dim=1).clamp_min(1)
+    # Mean log-prob over positives per anchor.
+    masked_lp = log_probs.masked_fill(~positive_mask, 0.0)
+    pos_mean = masked_lp.sum(dim=1) / num_pos
+    return -pos_mean.mean()
 
 
 def full_atlas_loss(
