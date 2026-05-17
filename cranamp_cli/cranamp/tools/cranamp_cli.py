@@ -31,6 +31,22 @@ def scale_pair(scale: float | tuple[float, float]) -> tuple[float, float]:
 
 
 class Renderer:
+    """Render Winamp skin views with true final-frame provenance tracking.
+
+    Each canvas pixel maintains `(atlas_y, atlas_x)` ids of the atlas source it
+    currently displays, or `(-1, -1)` if it's background / procedural / erased.
+    Subsequent overdraw overwrites provenance. The final `visible_atlas_mask`
+    is gathered at the end from the canvas-pixel provenance buffer -- so it
+    correctly reflects which atlas pixels actually survived to the final
+    rendered frame.
+
+    This replaces the prior behaviour where `visible_mask` was set during
+    every blit regardless of later overdraw -- a "source-use" mask that
+    counted atlas pixels that may have been later erased or covered.
+    """
+
+    PROVENANCE_NONE = -1  # sentinel for "no atlas source at this canvas pixel"
+
     def __init__(self, skin_source: Path, canvas_w: int, canvas_h: int):
         self.canvas_w = canvas_w
         self.canvas_h = canvas_h
@@ -40,9 +56,28 @@ class Renderer:
         self.default_assets = load_default_assets(DEFAULT_SKIN)
         self.images: dict[str, Image.Image] = {}
         self.canvas = Image.new("RGBA", (canvas_w, canvas_h), (14, 14, 18, 255))
-        self.visible_mask = Image.new("L", (self.atlas_profile.canvas_w, self.atlas_profile.canvas_h), 0)
+        # Canvas-shape provenance: [H, W, 2] = (atlas_y, atlas_x). -1 = none.
+        self.provenance = np.full((canvas_h, canvas_w, 2), self.PROVENANCE_NONE, dtype=np.int32)
         self.rects = np.zeros((80, 5), dtype="<f4")
         self.state = np.zeros((32,), dtype="<f4")
+
+    @property
+    def visible_mask(self) -> Image.Image:
+        """Final-frame visible atlas mask, derived from canvas provenance.
+
+        An atlas pixel is "visible" iff at least one canvas pixel still
+        references it in `self.provenance` after all blits / fills / erases /
+        overdraws have been applied. Computed on demand."""
+        ah, aw = self.atlas_profile.canvas_h, self.atlas_profile.canvas_w
+        mask = np.zeros((ah, aw), dtype=np.uint8)
+        valid = self.provenance[..., 0] >= 0
+        if valid.any():
+            ay = self.provenance[..., 0][valid]
+            ax = self.provenance[..., 1][valid]
+            np.clip(ay, 0, ah - 1, out=ay)
+            np.clip(ax, 0, aw - 1, out=ax)
+            mask[ay, ax] = 255
+        return Image.fromarray(mask, "L")
 
     def image_for(self, file_name: str) -> Image.Image:
         key = normalize_name(file_name)
@@ -88,6 +123,26 @@ class Renderer:
             canvas_h=self.canvas_h,
         )
 
+    # Encoding base for packing (atlas_y, atlas_x) into a single int32 id so
+    # we can resize provenance through PIL's exact same NEAREST path that we
+    # use on the rendered crop. Atlas is bounded by canvas_w/h = 1024, so
+    # 2048 keeps ids comfortably in int32 with room for a -1 "no source"
+    # sentinel.
+    _ATLAS_ID_STRIDE = 2048
+
+    def _encode_atlas_id(self, atlas_y: np.ndarray, atlas_x: np.ndarray) -> np.ndarray:
+        """Pack (atlas_y, atlas_x) into one int32 image-friendly id."""
+        return (atlas_y.astype(np.int32) * self._ATLAS_ID_STRIDE
+                + atlas_x.astype(np.int32))
+
+    def _decode_atlas_id(self, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Decode packed ids back to (atlas_y, atlas_x). Negative ids mean
+        'no atlas source' and decode to (-1, -1)."""
+        valid = ids >= 0
+        ay = np.where(valid, ids // self._ATLAS_ID_STRIDE, self.PROVENANCE_NONE).astype(np.int32)
+        ax = np.where(valid, ids %  self._ATLAS_ID_STRIDE, self.PROVENANCE_NONE).astype(np.int32)
+        return ay, ax
+
     def blit(
         self,
         slot_name: str,
@@ -102,36 +157,92 @@ class Renderer:
         scale_x, scale_y = scale_pair(scale)
         source = self.image_for(file_name)
         crop = source.crop((sx, sy, sx + sw, sy + sh))
-        if scale_x != 1.0 or scale_y != 1.0:
-            crop = crop.resize(
-                (max(1, round(sw * scale_x)), max(1, round(sh * scale_y))),
-                Image.Resampling.NEAREST,
-            )
-        self.canvas.alpha_composite(crop, (round(dx), round(dy)))
+        rendered_w = max(1, round(sw * scale_x))
+        rendered_h = max(1, round(sh * scale_y))
+        if rendered_w != sw or rendered_h != sh:
+            rendered_crop = crop.resize((rendered_w, rendered_h), Image.Resampling.NEAREST)
+        else:
+            rendered_crop = crop
+        rdx, rdy = round(dx), round(dy)
+        self.canvas.alpha_composite(rendered_crop, (rdx, rdy))
 
+        # Provenance via PIL-exact NEAREST resize on a packed atlas-id buffer.
+        # For each source pixel we encode (slot.y+sy+row, slot.x+sx+col); we
+        # mark fully-transparent source pixels as -1; then we resize through
+        # the same PIL NEAREST path as the rendered crop so dest atlas coords
+        # match the visual sampling exactly, even for non-integer scales and
+        # asymmetric component sx/sy.
         slot = self.slots[slot_name]
-        alpha = np.array(source.crop((sx, sy, sx + sw, sy + sh)).getchannel("A"))
-        mask = np.array(self.visible_mask)
-        visible = alpha > 0
-        if visible.any():
-            y0 = slot.y + sy
-            x0 = slot.x + sx
-            mask[y0 : y0 + sh, x0 : x0 + sw] = np.where(
-                visible,
-                255,
-                mask[y0 : y0 + sh, x0 : x0 + sw],
-            )
-            self.visible_mask = Image.fromarray(mask, "L")
+        src_alpha = np.array(crop.getchannel("A"))  # [sh, sw]
+        src_atlas_y = slot.y + sy + np.arange(sh, dtype=np.int32)
+        src_atlas_x = slot.x + sx + np.arange(sw, dtype=np.int32)
+        src_ids = self._encode_atlas_id(
+            np.broadcast_to(src_atlas_y[:, None], (sh, sw)),
+            np.broadcast_to(src_atlas_x[None, :], (sh, sw)),
+        )
+        src_ids = np.where(src_alpha > 0, src_ids, self.PROVENANCE_NONE).astype(np.int32)
+        if rendered_w != sw or rendered_h != sh:
+            id_img = Image.fromarray(src_ids, mode="I")
+            id_resized = id_img.resize((rendered_w, rendered_h), Image.Resampling.NEAREST)
+            dst_ids = np.array(id_resized, dtype=np.int32)
+        else:
+            dst_ids = src_ids
+        dst_atlas_y, dst_atlas_x = self._decode_atlas_id(dst_ids)
+
+        # Clip to canvas bounds.
+        cy0 = max(0, rdy); cy1 = min(self.canvas_h, rdy + rendered_h)
+        cx0 = max(0, rdx); cx1 = min(self.canvas_w, rdx + rendered_w)
+        if cy1 > cy0 and cx1 > cx0:
+            sy0_, sy1_ = cy0 - rdy, cy1 - rdy
+            sx0_, sx1_ = cx0 - rdx, cx1 - rdx
+            opaque = dst_atlas_y[sy0_:sy1_, sx0_:sx1_] >= 0
+            if opaque.any():
+                target = self.provenance[cy0:cy1, cx0:cx1]  # view, [h, w, 2]
+                target[..., 0] = np.where(opaque, dst_atlas_y[sy0_:sy1_, sx0_:sx1_], target[..., 0])
+                target[..., 1] = np.where(opaque, dst_atlas_x[sy0_:sy1_, sx0_:sx1_], target[..., 1])
 
         if component_id is not None:
             self.mark_rect(component_id, (dx, dy, sw, sh), scale)
 
+    def _clear_provenance_rect(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        """Clear canvas provenance in a rect (inclusive bounds clipped to canvas)."""
+        cy0 = max(0, min(self.canvas_h, y0))
+        cy1 = max(0, min(self.canvas_h, y1))
+        cx0 = max(0, min(self.canvas_w, x0))
+        cx1 = max(0, min(self.canvas_w, x1))
+        if cy1 > cy0 and cx1 > cx0:
+            self.provenance[cy0:cy1, cx0:cx1, :] = self.PROVENANCE_NONE
+
+    def composite_procedural(self, layer: Image.Image, dest: tuple[int, int]) -> None:
+        """Alpha-composite a procedurally-painted layer onto the canvas and
+        clear provenance wherever the layer's alpha is non-zero. Use this for
+        text overlays, histogram bars, and any non-atlas content -- so those
+        canvas pixels stop counting as visible-from-atlas."""
+        dx, dy = int(dest[0]), int(dest[1])
+        self.canvas.alpha_composite(layer, (dx, dy))
+        if "A" not in layer.getbands():
+            return
+        layer_alpha = np.array(layer.getchannel("A"))
+        nz = layer_alpha > 0
+        cy0 = max(0, dy); cy1 = min(self.canvas_h, dy + layer.height)
+        cx0 = max(0, dx); cx1 = min(self.canvas_w, dx + layer.width)
+        if cy1 > cy0 and cx1 > cx0:
+            sy0_, sy1_ = cy0 - dy, cy1 - dy
+            sx0_, sx1_ = cx0 - dx, cx1 - dx
+            mask = nz[sy0_:sy1_, sx0_:sx1_]
+            if mask.any():
+                target = self.provenance[cy0:cy1, cx0:cx1]
+                target[..., 0] = np.where(mask, self.PROVENANCE_NONE, target[..., 0])
+                target[..., 1] = np.where(mask, self.PROVENANCE_NONE, target[..., 1])
+
     def fill_rect(self, rect: tuple[float, float, float, float], color: tuple[int, int, int, int]) -> None:
         x, y, w, h = rect
-        ImageDraw.Draw(self.canvas).rectangle(
-            [round(x), round(y), round(x + w), round(y + h)],
-            fill=color,
-        )
+        x0, y0 = round(x), round(y)
+        x1, y1 = round(x + w), round(y + h)
+        ImageDraw.Draw(self.canvas).rectangle([x0, y0, x1, y1], fill=color)
+        # Clear provenance: the fill is procedural, not from any atlas.
+        # PIL rectangle inclusive bounds -> our half-open clip needs +1 on right/bottom.
+        self._clear_provenance_rect(x0, y0, x1 + 1, y1 + 1)
 
     def erase_rect_with_edge_average(
         self,
@@ -161,6 +272,8 @@ class Renderer:
             samples.append((14, 14, 18, 255))
         avg = tuple(int(round(sum(sample[channel] for sample in samples) / len(samples))) for channel in range(4))
         ImageDraw.Draw(self.canvas).rectangle([x0, y0, x1 - 1, y1 - 1], fill=avg)
+        # Erase wipes prior atlas content -> clear provenance in the same rect.
+        self._clear_provenance_rect(x0, y0, x1, y1)
 
 
 _ARTIST_POOL = [
@@ -455,7 +568,9 @@ def draw_playlist_entries(
         color = (232, 238, 220, 255) if row == selected_row else (93, 184, 207, 255)
         draw.text((4, 2 + row * 11), entry[:38], font=font, fill=color)
     resized = layer.resize((max(1, round(list_w * scale)), max(1, round(list_h * scale))), Image.Resampling.NEAREST)
-    renderer.canvas.alpha_composite(resized, (round(origin[0] + 12 * scale), round(origin[1] + 20 * scale)))
+    # Use composite_procedural: clears provenance wherever the text layer is
+    # opaque, so playlist text doesn't get counted as visible PLEDIT atlas.
+    renderer.composite_procedural(resized, (round(origin[0] + 12 * scale), round(origin[1] + 20 * scale)))
 
 
 def render_main(renderer: Renderer, params: dict) -> None:
@@ -798,16 +913,22 @@ def _render_window_pass(
 ) -> None:
     """Render one window onto a transparent sub-canvas with its origin at (0,0),
     vertically stretch it by window_sy, then composite at final_origin on the
-    real canvas. Rects emitted during the pass are remapped: y_norm becomes
-    final_origin_y/canvas_h + y_norm_sub * window_sy."""
+    real canvas. Rects emitted during the pass are remapped, and the
+    sub-canvas's provenance buffer is stretched (nearest in y) and composited
+    onto the main provenance buffer."""
     sub_canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    sub_provenance = np.full((canvas_h, canvas_w, 2), Renderer.PROVENANCE_NONE, dtype=np.int32)
     saved_canvas = renderer.canvas
+    saved_provenance = renderer.provenance
     rects_before = renderer.rects.copy()
 
     sub_params = {**params, "windows": {**params["windows"], window_name: [0, 0]}}
     renderer.canvas = sub_canvas
+    renderer.provenance = sub_provenance
     render_fn(renderer, sub_params)
     renderer.canvas = saved_canvas
+    final_sub_provenance = renderer.provenance
+    renderer.provenance = saved_provenance
 
     emitted_mask = np.any(renderer.rects != rects_before, axis=1)
     rects_local = renderer.rects.copy()
@@ -815,12 +936,54 @@ def _render_window_pass(
 
     if abs(window_sy - 1.0) > 1e-6:
         stretched_h = max(1, int(round(canvas_h * window_sy)))
-        stretched = sub_canvas.resize((canvas_w, stretched_h), Image.Resampling.BILINEAR)
+        # NEAREST for both canvas AND provenance so the visual sampling and
+        # the atlas-coord sampling are pixel-aligned. (BILINEAR canvas with
+        # NEAREST provenance gave visually-blended pixels with mismatched
+        # provenance -- the prior Codex review caught this.)
+        stretched = sub_canvas.resize((canvas_w, stretched_h), Image.Resampling.NEAREST)
+        # Encode sub-provenance as packed atlas ids, NEAREST-resize through
+        # PIL, decode back. Guarantees row mapping matches the canvas's.
+        sub_ids = Renderer._ATLAS_ID_STRIDE * np.maximum(final_sub_provenance[..., 0], 0) + np.maximum(final_sub_provenance[..., 1], 0)
+        sub_ids = np.where(final_sub_provenance[..., 0] < 0, Renderer.PROVENANCE_NONE, sub_ids).astype(np.int32)
+        ids_img = Image.fromarray(sub_ids, mode="I")
+        ids_resized = ids_img.resize((canvas_w, stretched_h), Image.Resampling.NEAREST)
+        ids_dst = np.array(ids_resized, dtype=np.int32)
+        valid_dst = ids_dst >= 0
+        stretched_prov = np.full((stretched_h, canvas_w, 2), Renderer.PROVENANCE_NONE, dtype=np.int32)
+        stretched_prov[..., 0] = np.where(valid_dst, ids_dst // Renderer._ATLAS_ID_STRIDE, Renderer.PROVENANCE_NONE)
+        stretched_prov[..., 1] = np.where(valid_dst, ids_dst %  Renderer._ATLAS_ID_STRIDE, Renderer.PROVENANCE_NONE)
     else:
         stretched = sub_canvas
+        stretched_prov = final_sub_provenance
 
     ox, oy = final_origin
     renderer.canvas.alpha_composite(stretched, (int(ox), int(oy)))
+    # Paste sub-provenance onto main:
+    #   - where the stretched sub-canvas alpha > 0 (i.e. that pixel painted
+    #     over the main canvas), the main provenance MUST be replaced.
+    #     If sub provenance is valid -> use its atlas coords.
+    #     If sub provenance is invalid (e.g. opaque procedural histogram /
+    #     text in the sub-canvas) -> clear main provenance to -1.
+    #   - where the stretched sub-canvas alpha == 0, leave main alone.
+    stretched_alpha = np.array(stretched.getchannel("A"))  # [stretched_h, canvas_w]
+    py0 = max(0, int(oy)); py1 = min(canvas_h, int(oy) + stretched_prov.shape[0])
+    px0 = max(0, int(ox)); px1 = min(canvas_w, int(ox) + stretched_prov.shape[1])
+    if py1 > py0 and px1 > px0:
+        sy0_ = py0 - int(oy); sy1_ = py1 - int(oy)
+        sx0_ = px0 - int(ox); sx1_ = px1 - int(ox)
+        src = stretched_prov[sy0_:sy1_, sx0_:sx1_]
+        alpha_region = stretched_alpha[sy0_:sy1_, sx0_:sx1_]
+        tgt = renderer.provenance[py0:py1, px0:px1]
+        opaque = alpha_region > 0
+        sub_valid = src[..., 0] >= 0
+        # New main provenance per pixel:
+        #   opaque & sub_valid    -> src atlas coords
+        #   opaque & not sub_valid -> -1 (cleared)
+        #   not opaque             -> tgt unchanged
+        new_y = np.where(opaque, np.where(sub_valid, src[..., 0], Renderer.PROVENANCE_NONE), tgt[..., 0])
+        new_x = np.where(opaque, np.where(sub_valid, src[..., 1], Renderer.PROVENANCE_NONE), tgt[..., 1])
+        tgt[..., 0] = new_y
+        tgt[..., 1] = new_x
 
     oy_norm = oy / canvas_h
     for cid in np.where(emitted_mask)[0]:

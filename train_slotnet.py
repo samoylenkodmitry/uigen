@@ -32,6 +32,7 @@ from atlas_ai.profiles import load_atlas_profile, load_json
 from models.atlas import load_full_atlas_target, pack_default_atlas_tensor
 from models.losses import full_atlas_loss_v31
 from models.slotnet_v31 import SlotNetV31
+from models.slotnet_v32 import SlotNetV32, observed_atlas_loss
 
 
 def set_seeds(seed: int) -> None:
@@ -100,6 +101,23 @@ def main() -> int:
     parser.add_argument("--checkpoint-every", type=int, default=2000)
     parser.add_argument("--limit-rows", type=int, default=None,
                         help="Use only the first N rows of train.csv. For overfit tests.")
+    parser.add_argument("--alpha-start", type=float, default=1.0,
+                        help="Residual alpha at step 0. Set <1.0 for warm-start schedule.")
+    parser.add_argument("--alpha-end", type=float, default=1.0,
+                        help="Residual alpha at --alpha-ramp-steps. Linear ramp.")
+    parser.add_argument("--alpha-ramp-steps", type=int, default=10000,
+                        help="Steps over which residual alpha ramps from start to end.")
+    parser.add_argument("--residual-l2-start", type=float, default=0.0,
+                        help="L2 penalty on RGB residual logits at step 0.")
+    parser.add_argument("--residual-l2-end", type=float, default=0.0,
+                        help="L2 penalty on RGB residual logits at --residual-l2-ramp-steps.")
+    parser.add_argument("--residual-l2-ramp-steps", type=int, default=10000)
+    parser.add_argument("--snapshot-every", type=int, default=0,
+                        help="If >0, save best/last and a snapshot atlas .pt every N steps.")
+    parser.add_argument("--model", default="v31", choices=["v31", "v32"],
+                        help="SlotNet variant. v32 adds observed-atlas aux head.")
+    parser.add_argument("--observed-weight", type=float, default=1.0,
+                        help="Weight on observed_atlas auxiliary loss (V3.2 only).")
     args = parser.parse_args()
 
     set_seeds(args.seed)
@@ -114,7 +132,10 @@ def main() -> int:
     device = torch.device(args.device)
 
     default_atlas = pack_default_atlas_tensor(args.default_skin, atlas_profile).to(device)
-    model = SlotNetV31(atlas_profile=atlas_profile, default_atlas=default_atlas, base_channels=args.base_channels).to(device)
+    if args.model == "v32":
+        model = SlotNetV32(atlas_profile=atlas_profile, default_atlas=default_atlas, base_channels=args.base_channels).to(device)
+    else:
+        model = SlotNetV31(atlas_profile=atlas_profile, default_atlas=default_atlas, base_channels=args.base_channels).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     paired = _PairedRowDataset(base_ds)
@@ -133,12 +154,32 @@ def main() -> int:
     best = float("inf")
     step = 0
     metric: dict[str, float] = {}
+    def alpha_at(s: int) -> float:
+        if args.alpha_ramp_steps <= 0:
+            return args.alpha_end
+        t = min(1.0, s / max(1, args.alpha_ramp_steps))
+        return args.alpha_start + (args.alpha_end - args.alpha_start) * t
+
+    def residual_l2_at(s: int) -> float:
+        if args.residual_l2_ramp_steps <= 0:
+            return args.residual_l2_end
+        t = min(1.0, s / max(1, args.residual_l2_ramp_steps))
+        # Linear interpolation in log-space if both > 0, else linear.
+        a = args.residual_l2_start
+        b = args.residual_l2_end
+        if a > 0 and b > 0:
+            import math
+            return float(math.exp(math.log(a) + (math.log(b) - math.log(a)) * t))
+        return a + (b - a) * t
+
     try:
         while step < args.steps:
             for batch in loader:
                 view = batch["view"].to(device)
                 tgt = {k: v.to(device) for k, v in batch.items() if k != "view" and torch.is_tensor(v)}
-                out_pred = model(view)
+                alpha = alpha_at(step)
+                l2_lambda = residual_l2_at(step)
+                out_pred = model(view, residual_alpha=alpha)
                 losses = full_atlas_loss_v31(
                     out_pred["prediction"],
                     tgt["target_rgb"],
@@ -150,12 +191,35 @@ def main() -> int:
                     sobel_weight=args.sobel_weight,
                     contrast_weight=args.contrast_weight,
                 )
+                # Residual L2 stabilizer (penalizes pulling RGB away from the
+                # color-transferred default prior).
+                if l2_lambda > 0:
+                    res_l2 = out_pred["residual_logits"][:, :3].pow(2).mean()
+                    total = losses["total"] + l2_lambda * res_l2
+                    losses = dict(losses)
+                    losses["total"] = total
+                    losses["residual_l2"] = res_l2.detach()
+                # Observed-atlas auxiliary head (V3.2 only).
+                if args.model == "v32" and "observed_logits" in out_pred:
+                    obs = observed_atlas_loss(
+                        out_pred["observed_logits"],
+                        tgt["target_rgb"],
+                        tgt["visible_mask"],
+                        tgt["atlas_mask"],
+                    )
+                    total = losses["total"] + args.observed_weight * obs["total"]
+                    losses = dict(losses)
+                    losses["total"] = total
+                    losses["obs_rgb"] = obs["rgb_l1"].detach()
+                    losses["obs_mask"] = obs["mask_bce"].detach()
                 optimizer.zero_grad(set_to_none=True)
                 losses["total"].backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 metric = {k: float(v.detach().cpu()) for k, v in losses.items()}
                 metric["step"] = step
+                metric["alpha"] = float(alpha)
+                metric["residual_l2_lambda"] = float(l2_lambda)
                 with metrics_path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(metric, sort_keys=True) + "\n")
                 if metric["total"] < best:
@@ -163,6 +227,8 @@ def main() -> int:
                     save_state_dict(out / "best.safetensors", model.state_dict())
                 if (step + 1) % args.checkpoint_every == 0:
                     save_state_dict(out / "last.safetensors", model.state_dict())
+                if args.snapshot_every > 0 and (step + 1) % args.snapshot_every == 0:
+                    save_state_dict(out / f"snapshot_step{step+1:06d}.safetensors", model.state_dict())
                 step += 1
                 if step >= args.steps:
                     break

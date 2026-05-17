@@ -136,6 +136,49 @@ def main() -> int:
         print("  WARNING: looks collapsed (low diff + low std).")
     else:
         print("  OK: model output varies with input.")
+
+    # C. Target retrieval: does pred[i] match target[i] more than target[j!=i]?
+    # If the model just produces "an atlas" regardless of input, the retrieval
+    # confusion matrix collapses and top-1 == random chance.
+    print("\n=== C. Target retrieval ===")
+    n_ret = min(args.n_val, len(val_ds.rows))
+    preds = []
+    targets = []
+    masks = []
+    with torch.no_grad():
+        for r in val_ds.rows[:n_ret]:
+            view = image_to_tensor(r.view_png, "RGB").unsqueeze(0).to(device)
+            tgt = image_to_tensor(r.atlas_png, "RGB").to(device)
+            mask = image_to_tensor(r.atlas_mask_png, "L").to(device)
+            out = model(view)["prediction"][0, :3].sigmoid()
+            preds.append(out)
+            targets.append(tgt)
+            masks.append(mask)
+    pred_stack = torch.stack(preds, dim=0)
+    target_stack = torch.stack(targets, dim=0)
+    mask_stack = torch.stack(masks, dim=0)
+    n = pred_stack.shape[0]
+    D = torch.zeros(n, n, device=device)
+    for i in range(n):
+        for j in range(n):
+            m = mask_stack[j]
+            denom = m.sum() * 3 + 1e-8
+            D[i, j] = ((pred_stack[i] - target_stack[j]).abs() * m).sum() / denom
+    top1 = D.argmin(dim=1)
+    correct = (top1 == torch.arange(n, device=device))
+    acc = float(correct.float().mean())
+    diag_d = float(D.diagonal().mean())
+    off_d_min = float(D.masked_fill(torch.eye(n, dtype=torch.bool, device=device), float("inf")).min(dim=1).values.mean())
+    margin = off_d_min - diag_d
+    print(f"  n={n}  top-1 retrieval accuracy = {acc*100:.1f}% (chance = {100/n:.1f}%)")
+    print(f"  mean correct distance        = {diag_d:.4f}")
+    print(f"  mean nearest-wrong distance  = {off_d_min:.4f}")
+    print(f"  margin                       = {margin:+.4f}")
+    if margin > 0:
+        print("  OK: pred is closer to its own target than to others.")
+    else:
+        print("  WARNING: pred is closer to wrong targets -- weak identity pathway.")
+
     return 0
 
 

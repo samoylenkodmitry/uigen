@@ -210,19 +210,24 @@ class SlotNetV31(nn.Module):
             x = F.interpolate(x, size=(self.atlas_h, self.atlas_w), mode="bilinear", align_corners=False)
         return x
 
-    def forward(self, view: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, view: torch.Tensor, residual_alpha: float = 1.0) -> dict[str, torch.Tensor]:
         f5, style = self.encode(view)
         residual_logits = self.decode_residual(f5, style)
-        # Input-conditioned default-atlas prior.
-        prior_rgb = color_transfer_default(self.default_atlas, view)  # [B, 3, H, W] in [0, 1]
+        prior_rgb = color_transfer_default(self.default_atlas, view)
         prior_logit = torch.logit(prior_rgb.clamp(0.005, 0.995))
-        rgb_logits = prior_logit + residual_logits[:, :3]
+        # Scaled residual: residual_alpha modulates how strongly the residual
+        # is allowed to deviate from the colorized-default prior. Used as a
+        # warm-start schedule (small alpha early, ramping up) to prevent the
+        # decoder from immediately smashing the prior structure.
+        scaled_residual_rgb = residual_alpha * residual_logits[:, :3]
+        rgb_logits = prior_logit + scaled_residual_rgb
         special_logits = residual_logits[:, 3:]
         prediction = torch.cat((rgb_logits, special_logits), dim=1)
         return {
             "prediction": prediction,
             "prior_rgb": prior_rgb,
             "residual_logits": residual_logits,
+            "scaled_residual_rgb": scaled_residual_rgb,
         }
 
 
