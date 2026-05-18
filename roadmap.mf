@@ -1,4 +1,0 @@
-roadmap=roadmap.md
-status=early-data-pipeline
-default_skin=assets/default_skin
-cranamp_repo_env=CRANAMP_REPO

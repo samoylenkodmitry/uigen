@@ -15,14 +15,8 @@ class SampleRow:
     skin_id: str
     variant_id: str
     view_png: str
-    rects_f32: str
-    state_f32: str
-    visible_mask_png: str
     atlas_png: str
-    atlas_mask_png: str
-    slot_weight_f32: str
     meta_json: str
-    params_json: str
 
 
 def read_sample_csv(path: str | Path) -> list[SampleRow]:
@@ -51,18 +45,9 @@ class RenderDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
         row = self.rows[index]
-        rects = torch.from_numpy(np.fromfile(row.rects_f32, dtype="<f4").reshape(80, 5))
-        state = torch.from_numpy(np.fromfile(row.state_f32, dtype="<f4").reshape(32))
-        slot_weights = torch.from_numpy(np.fromfile(row.slot_weight_f32, dtype="<f4"))
         return {
             "skin_id": row.skin_id,
             "variant_id": row.variant_id,
             "view": image_to_tensor(row.view_png, "RGB"),
-            "rects": rects,
-            "state": state,
-            "visible_mask": image_to_tensor(row.visible_mask_png, "L"),
             "atlas": image_to_tensor(row.atlas_png, "RGB"),
-            "atlas_mask": image_to_tensor(row.atlas_mask_png, "L"),
-            "slot_weights": slot_weights,
         }
-

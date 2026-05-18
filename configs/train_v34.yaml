@@ -1,20 +1,17 @@
 input:
-  width: 768
-  height: 1280
+  width: 960
+  height: 1728
 atlas:
   width: 1024
   height: 1024
-  profile: configs/atlas_v1.json
+  profile: configs/atlas_train_v1.json
 export:
   profile: configs/export_profile_classic.json
 data:
-  root: data_v0
+  root: data_v34
   split_by: skin_id
-geonet:
-  rect_count: 80
-  state_count: 32
-  train_eq_band_heatmaps: false
 slotnet:
+  version: 34
   active_slots:
     - MAIN
     - TITLEBAR

@@ -14,7 +14,7 @@ from atlas_ai.profiles import load_atlas_profile, load_export_profile
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--atlas", required=True)
-    parser.add_argument("--atlas-profile", default="configs/atlas_v1.json")
+    parser.add_argument("--atlas-profile", default="configs/atlas_train_v1.json")
     parser.add_argument("--export-profile", default="configs/export_profile_classic.json")
     parser.add_argument("--default-skin", default="assets/default_skin")
     parser.add_argument("--out", required=True)
@@ -33,4 +33,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -8,6 +8,8 @@ __pycache__/
 data/
 data_v0/
 data_v0_*/
+data_v34/
+data_v34_*/
 debug/
 runs/
 eval/

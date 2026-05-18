@@ -5,7 +5,7 @@ import argparse
 import csv
 import hashlib
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import subprocess
 
@@ -15,8 +15,8 @@ def stable_seed(skin_id: str, variant_id: int) -> int:
     return base * 1_000_003 + variant_id
 
 
-def _render_one(args_tuple: tuple[str, str, int, str, int, int, str, bool]) -> tuple[str, int]:
-    cranamp_cli, skin_id, variant_id, source_path, canvas_w, canvas_h, out_str, state_balanced = args_tuple
+def _render_one(args_tuple: tuple[str, str, int, str, int, int, str]) -> tuple[str, int]:
+    cranamp_cli, skin_id, variant_id, source_path, canvas_w, canvas_h, out_str = args_tuple
     out = Path(out_str)
     sample_id = f"{skin_id}_{variant_id:04d}"
     seed = stable_seed(skin_id, variant_id)
@@ -28,11 +28,6 @@ def _render_one(args_tuple: tuple[str, str, int, str, int, int, str, bool]) -> t
         "--canvas-w", str(canvas_w),
         "--canvas-h", str(canvas_h),
         "--out-view", str(out / "views" / f"{sample_id}.png"),
-        "--out-rects", str(out / "rects" / f"{sample_id}.f32"),
-        "--out-state", str(out / "states" / f"{sample_id}.f32"),
-        "--out-visible-atlas-mask", str(out / "visible_masks" / f"{sample_id}.png"),
-        "--out-params", str(out / "params" / f"{sample_id}.json"),
-        "--state-balanced", "true" if state_balanced else "false",
     ]
     result = subprocess.run(cmd, capture_output=True)
     return (sample_id, result.returncode)
@@ -40,13 +35,12 @@ def _render_one(args_tuple: tuple[str, str, int, str, int, int, str, bool]) -> t
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--valid-skins", default="data_v0/valid_skins.csv")
+    parser.add_argument("--valid-skins", default="data_v34/valid_skins.csv")
     parser.add_argument("--cranamp-cli", default="cranamp_cli/cranamp-cli")
-    parser.add_argument("--out", default="data_v0")
+    parser.add_argument("--out", default="data_v34")
     parser.add_argument("--variants", type=int, default=4)
     parser.add_argument("--canvas-w", type=int, default=960)
     parser.add_argument("--canvas-h", type=int, default=1728)
-    parser.add_argument("--state-balanced", action="store_true")
     parser.add_argument("--limit", type=int, default=None,
                         help="Only render the first N skins from valid_skins.csv (for smoke).")
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 1),
@@ -54,8 +48,7 @@ def main() -> int:
     args = parser.parse_args()
 
     out = Path(args.out)
-    for dirname in ["views", "rects", "states", "visible_masks", "params"]:
-        (out / dirname).mkdir(parents=True, exist_ok=True)
+    (out / "views").mkdir(parents=True, exist_ok=True)
 
     with Path(args.valid_skins).open("r", newline="", encoding="utf-8") as f:
         rows = [row for row in csv.DictReader(f) if row.get("status") == "ok"]
@@ -64,7 +57,7 @@ def main() -> int:
 
     jobs = [
         (args.cranamp_cli, row["skin_id"], variant_id, row["source_path"],
-         args.canvas_w, args.canvas_h, str(out), args.state_balanced)
+         args.canvas_w, args.canvas_h, str(out))
         for row in rows for variant_id in range(args.variants)
     ]
     total = len(jobs)

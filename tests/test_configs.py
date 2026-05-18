@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_atlas_slots_fit_canvas_and_do_not_overlap():
-    profile = load_atlas_profile(ROOT / "configs/atlas_v1.json")
+    profile = load_atlas_profile(ROOT / "configs/atlas_train_v1.json")
     assert_slots_fit(profile)
 
     slots = profile.slots
@@ -19,7 +19,7 @@ def test_atlas_slots_fit_canvas_and_do_not_overlap():
 
 
 def test_export_profile_fits_referenced_atlas_slots():
-    profile = load_atlas_profile(ROOT / "configs/atlas_v1.json")
+    profile = load_atlas_profile(ROOT / "configs/atlas_train_v1.json")
     export_profile = load_export_profile(ROOT / "configs/export_profile_classic.json")
     slots = profile.slots_by_name
 
@@ -27,4 +27,3 @@ def test_export_profile_fits_referenced_atlas_slots():
         slot = slots[info["slot"]]
         assert info["w"] <= slot.w, file_name
         assert info["h"] <= slot.h, file_name
-

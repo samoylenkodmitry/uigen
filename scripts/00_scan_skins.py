@@ -18,7 +18,7 @@ REQUIRED_FOR_PACK = {"main.bmp"}
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skins-raw", default="skins_raw")
-    parser.add_argument("--out", default="data_v0/skin_scan.csv")
+    parser.add_argument("--out", default="data_v34/skin_scan.csv")
     args = parser.parse_args()
 
     sources = discover_skin_sources(args.skins_raw)
@@ -71,4 +71,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

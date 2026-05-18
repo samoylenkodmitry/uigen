@@ -16,10 +16,10 @@ from atlas_ai.skins import discover_skin_sources, load_default_assets, load_skin
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skins-raw", default="skins_raw")
-    parser.add_argument("--atlas-profile", default="configs/atlas_v1.json")
+    parser.add_argument("--atlas-profile", default="configs/atlas_train_v1.json")
     parser.add_argument("--export-profile", default="configs/export_profile_classic.json")
     parser.add_argument("--default-skin", default="assets/default_skin")
-    parser.add_argument("--out", default="data_v0")
+    parser.add_argument("--out", default="data_v34")
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 
@@ -46,8 +46,6 @@ def main() -> int:
                         "status": "reject",
                         "reason": packed.rejected_reason,
                         "atlas_path": "",
-                        "mask_path": "",
-                        "slot_weight_path": "",
                         "meta_path": "",
                     }
                 )
@@ -70,8 +68,6 @@ def main() -> int:
                     "status": "error",
                     "reason": str(exc),
                     "atlas_path": "",
-                    "mask_path": "",
-                    "slot_weight_path": "",
                     "meta_path": "",
                 }
             )
@@ -86,8 +82,6 @@ def main() -> int:
                 "status",
                 "reason",
                 "atlas_path",
-                "mask_path",
-                "slot_weight_path",
                 "meta_path",
             ],
         )
@@ -101,4 +95,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

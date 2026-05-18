@@ -28,19 +28,12 @@ def collect_samples(data: Path, valid_rows: list[dict[str, str]]) -> list[dict[s
         if skin_id not in rows_by_skin:
             continue
         packed = rows_by_skin[skin_id]
-        stem = f"{skin_id}_{variant_id}"
         sample = {
             "skin_id": skin_id,
             "variant_id": variant_id,
             "view_png": str(view),
-            "rects_f32": str(data / "rects" / f"{stem}.f32"),
-            "state_f32": str(data / "states" / f"{stem}.f32"),
-            "visible_mask_png": str(data / "visible_masks" / f"{stem}.png"),
             "atlas_png": packed["atlas_path"],
-            "atlas_mask_png": packed["mask_path"],
-            "slot_weight_f32": packed["slot_weight_path"],
             "meta_json": packed["meta_path"],
-            "params_json": str(data / "params" / f"{stem}.json"),
         }
         samples.append(sample)
     return samples
@@ -48,7 +41,7 @@ def collect_samples(data: Path, valid_rows: list[dict[str, str]]) -> list[dict[s
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data_v0")
+    parser.add_argument("--data", default="data_v34")
     parser.add_argument("--valid-skins", default=None)
     parser.add_argument("--out", default=None)
     parser.add_argument("--train", type=float, default=0.80)
@@ -70,14 +63,8 @@ def main() -> int:
         "skin_id",
         "variant_id",
         "view_png",
-        "rects_f32",
-        "state_f32",
-        "visible_mask_png",
         "atlas_png",
-        "atlas_mask_png",
-        "slot_weight_f32",
         "meta_json",
-        "params_json",
     ]
     split_by_skin = {}
     skin_ids = sorted({sample["skin_id"] for sample in samples})

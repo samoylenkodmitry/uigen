@@ -8,13 +8,12 @@ the roadmap commands:
 
 - `dump-classic-spec`
 - `render-random`
-- `render-with-params`
 
 The first implementation is a deterministic classic-skin compositor built from
 Cranamp's Winamp sprite constants and skin loading behavior. It renders main,
-EQ, and playlist windows, writes `[80,5]` rect labels, `[32]` state vectors,
-replayable `params.json`, and a visible atlas mask derived from the source slot
-pixels that were blitted.
+EQ, and playlist windows. For the V3.4 training pipeline, the only persisted
+training input is the rendered PNG; random render parameters are intentionally
+not saved.
 
 Run a smoke render:
 
@@ -24,12 +23,7 @@ Run a smoke render:
   --seed 1 \
   --canvas-w 941 \
   --canvas-h 1672 \
-  --out-view /tmp/cranamp_view.png \
-  --out-rects /tmp/cranamp_rects.f32 \
-  --out-state /tmp/cranamp_state.f32 \
-  --out-visible-atlas-mask /tmp/cranamp_mask.png \
-  --out-params /tmp/cranamp_params.json \
-  --state-balanced false
+  --out-view /tmp/cranamp_view.png
 ```
 
 The renderer is intentionally isolated in the copied fork so future work can

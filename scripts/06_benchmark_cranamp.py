@@ -35,16 +35,6 @@ def main() -> int:
                     str(args.canvas_h),
                     "--out-view",
                     str(root / f"{idx}.png"),
-                    "--out-rects",
-                    str(root / f"{idx}.rects.f32"),
-                    "--out-state",
-                    str(root / f"{idx}.state.f32"),
-                    "--out-visible-atlas-mask",
-                    str(root / f"{idx}.mask.png"),
-                    "--out-params",
-                    str(root / f"{idx}.params.json"),
-                    "--state-balanced",
-                    "false",
                 ]
                 subprocess.run(cmd, check=True)
         elapsed = time.perf_counter() - start

@@ -10,6 +10,9 @@ from .profiles import AtlasProfile
 from .skins import canonical_display_name, normalize_name
 
 
+RUNTIME_FALLBACK_BMPS = {"numbers.bmp", "text.bmp"}
+
+
 def export_atlas_to_skin(
     atlas_path: str | Path,
     atlas_profile: AtlasProfile,
@@ -17,6 +20,7 @@ def export_atlas_to_skin(
     default_skin: str | Path,
     out_dir: str | Path,
 ) -> Path:
+    atlas_path = Path(atlas_path)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -50,17 +54,21 @@ def export_atlas_to_skin(
         key = normalize_name(source.name)
         if key in written:
             continue
-        if source.suffix.lower() not in {".bmp", ".txt", ".cur", ".ani"}:
+        suffix = source.suffix.lower()
+        if suffix == ".bmp" and key not in RUNTIME_FALLBACK_BMPS:
+            continue
+        if suffix not in {".txt", ".cur", ".ani", ".bmp"}:
             continue
         shutil.copy2(source, out / source.name)
         written.add(key)
 
-    shutil.copy2(atlas_path, out / "atlas.png")
+    atlas_copy_path = out / "atlas.png"
+    if atlas_path.resolve() != atlas_copy_path.resolve():
+        shutil.copy2(atlas_path, atlas_copy_path)
     zip_path = out / "skin.wsz"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file_path in sorted(out.iterdir(), key=lambda p: p.name.lower()):
-            if not file_path.is_file() or file_path.name in {"skin.wsz", "atlas.png"}:
+            if not file_path.is_file() or normalize_name(file_path.name) not in written:
                 continue
             archive.write(file_path, arcname=file_path.name)
     return zip_path
-
