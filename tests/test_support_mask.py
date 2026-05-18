@@ -92,6 +92,18 @@ def test_metrics_invariant_to_batch_size():
         assert torch.allclose(m1[key], m2[key], atol=1e-7), key
 
 
+def test_masked_mean_does_not_overflow_large_fp16_masks():
+    from models.losses import _masked_mean
+
+    values = torch.ones((1, 6, 315, 275), dtype=torch.float16)
+    mask = torch.ones((315, 275), dtype=torch.float16)
+
+    mean = _masked_mean(values, mask)
+
+    assert torch.isfinite(mean)
+    assert torch.allclose(mean, torch.tensor(1.0), atol=1e-6)
+
+
 def test_unsupported_pixels_receive_zero_gradient():
     files, target = _half_baseline_files()
     masks = load_support_masks()

@@ -34,11 +34,16 @@ def sobel_l1(pred_rgb: torch.Tensor, target_rgb: torch.Tensor) -> torch.Tensor:
 
 def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """Mean over True mask positions, averaged across batch and channel dims."""
-    pixels = mask.sum().clamp(min=1).to(values.dtype)
+    # Keep the denominator in fp32. Under CUDA AMP, large support masks can
+    # overflow fp16 when multiplied by channel count, silently producing zero
+    # edge losses for large files.
+    mask32 = mask.to(torch.float32)
+    values32 = values.to(torch.float32)
+    pixels = mask32.sum().clamp(min=1)
     batch = float(values.shape[0])
     channels = float(values.shape[1])
     denom = pixels * batch * channels
-    return (values * mask).sum() / denom
+    return (values32 * mask32).sum() / denom
 
 
 def exported_files_loss(
