@@ -14,8 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from atlas_ai.dataset import RenderDataset
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS, blank_atlas_like_files, crop_export_target
 from atlas_ai.profiles import load_atlas_profile
+from atlas_ai.support_mask import load_support_masks
 from infer_skin import detect_checkpoint_info, load_checkpoint
-from models.losses import sobel_l1
+from models.losses import sobel_edges
 from models.slotnet_v34 import SlotNetV34
 from models.slotnet_v35 import SlotNetV35
 
@@ -45,6 +46,10 @@ def main() -> int:
     supported_mask = torch.zeros((atlas_profile.canvas_h, atlas_profile.canvas_w), dtype=torch.bool, device=device)
     for slot in atlas_profile.slots:
         supported_mask[slot.y:slot.y + slot.h, slot.x:slot.x + slot.w] = True
+    file_support_masks = {
+        name: mask.to(device=device)
+        for name, mask in load_support_masks().items()
+    }
 
     ckpt_info = detect_checkpoint_info(Path(args.slotnet))
     base_channels = args.base_channels or ckpt_info.base_channels
@@ -99,9 +104,17 @@ def main() -> int:
                 pred_file = pred_files[spec.file_name]
                 target_file = crop_export_target(target, spec)
                 file_abs = (pred_file - target_file).abs()
-                mae = float(file_abs.mean().detach().cpu())
-                sobel = float(sobel_l1(pred_file, target_file).detach().cpu())
-                hit5 = float((file_abs <= (5.0 / 255.0)).float().mean().detach().cpu())
+                support = file_support_masks[spec.file_name]
+                support_f = support.to(target_file.dtype)
+                support_pixels = float(support.sum().clamp(min=1))
+                channels = pred_file.shape[1]
+                support_denom = support_pixels * channels
+                mae = float((file_abs * support_f).sum().detach().cpu() / support_denom)
+                pred_for_edges = pred_file * support_f + target_file * (1 - support_f)
+                edge_diff = (sobel_edges(pred_for_edges) - sobel_edges(target_file)).abs()
+                sobel = float((edge_diff * support_f).sum().detach().cpu() / support_denom)
+                hit5_per_chan = (file_abs <= (5.0 / 255.0)).to(target_file.dtype)
+                hit5 = float((hit5_per_chan * support_f).sum().detach().cpu() / support_denom)
                 stem = file_stem(spec.file_name)
                 per_file[stem] = {
                     "mae": mae,

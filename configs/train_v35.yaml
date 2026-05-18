@@ -30,3 +30,11 @@ loss:
   rgb: exported_file_l1
   edge: sobel_l1
   edge_weight: 1.5
+  optional_weight_override: configs/file_weights_v35_large_panels.yaml
+trainer:
+  num_workers: 0
+  pin_memory: false
+  persistent_workers: false
+  amp: false
+  best_metric_one_skin: train_total
+  best_metric_with_validation: val_exported_l1

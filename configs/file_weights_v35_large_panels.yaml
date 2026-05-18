@@ -1,0 +1,12 @@
+file_weights:
+  MAIN.bmp: 1.5
+  EQMAIN.bmp: 2.0
+  PLEDIT.bmp: 2.0
+  TITLEBAR.bmp: 2.0
+  CBUTTONS.bmp: 4.0
+  SHUFREP.bmp: 4.0
+  POSBAR.bmp: 4.0
+  VOLUME.bmp: 4.0
+  BALANCE.bmp: 4.0
+  MONOSTER.bmp: 4.0
+  PLAYPAUS.bmp: 4.0

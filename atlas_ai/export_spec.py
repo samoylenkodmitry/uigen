@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from pathlib import Path
 
 import torch
+import yaml
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,47 @@ def spec_by_file() -> dict[str, ExportFileSpec]:
     return {spec.file_name: spec for spec in TRAINABLE_EXPORT_SPECS}
 
 
+def _weight_key(file_name: str) -> str:
+    key = file_name.strip().lower()
+    if not key.endswith(".bmp"):
+        key = f"{key}.bmp"
+    return key
+
+
+def load_file_weight_overrides(path: str | Path) -> dict[str, float]:
+    """Load optional per-export-file weights from YAML."""
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if data is None:
+        return {}
+    if not isinstance(data, Mapping):
+        raise ValueError(f"file weight override must be a mapping: {path}")
+    if "file_weights" in data:
+        data = data["file_weights"]
+    if not isinstance(data, Mapping):
+        raise ValueError(f"file_weights must be a mapping: {path}")
+    return {_weight_key(str(key)): float(value) for key, value in data.items()}
+
+
+def with_file_weights(
+    weights: Mapping[str, float],
+    specs: tuple[ExportFileSpec, ...] = TRAINABLE_EXPORT_SPECS,
+) -> tuple[ExportFileSpec, ...]:
+    """Return export specs with selected file weights overridden."""
+    normalized = {_weight_key(str(key)): float(value) for key, value in weights.items()}
+    known = {_weight_key(spec.file_name) for spec in specs}
+    unknown = sorted(set(normalized) - known)
+    if unknown:
+        raise ValueError(f"unknown export file weight override(s): {', '.join(unknown)}")
+    return tuple(
+        replace(spec, weight=normalized.get(_weight_key(spec.file_name), spec.weight))
+        for spec in specs
+    )
+
+
+def specs_weight_map(specs: tuple[ExportFileSpec, ...] = TRAINABLE_EXPORT_SPECS) -> dict[str, float]:
+    return {spec.file_name: float(spec.weight) for spec in specs}
+
+
 def crop_export_target(target_rgb: torch.Tensor, spec: ExportFileSpec) -> torch.Tensor:
     return target_rgb[..., spec.y:spec.y + spec.h, spec.x:spec.x + spec.w]
 
@@ -67,4 +111,3 @@ def blank_atlas_like_files(
             )
         atlas[..., spec.y:spec.y + spec.h, spec.x:spec.x + spec.w] = file_rgb
     return atlas
-

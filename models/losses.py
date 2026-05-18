@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS, ExportFileSpec, crop_export_target
+from atlas_ai.support_mask import load_support_masks
 
 
 def sobel_edges(rgb: torch.Tensor) -> torch.Tensor:
@@ -31,6 +32,12 @@ def sobel_l1(pred_rgb: torch.Tensor, target_rgb: torch.Tensor) -> torch.Tensor:
     return (sobel_edges(pred_rgb) - sobel_edges(target_rgb)).abs().mean()
 
 
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Mean over True positions in mask, broadcast across batch+channel dims."""
+    denom = mask.sum().clamp(min=1).to(values.dtype) * values.shape[1]
+    return (values * mask).sum() / denom
+
+
 def exported_files_loss(
     file_logits: dict[str, torch.Tensor],
     target_rgb: torch.Tensor,
@@ -38,7 +45,12 @@ def exported_files_loss(
     specs: tuple[ExportFileSpec, ...] = TRAINABLE_EXPORT_SPECS,
     edge_weight: float = 1.5,
 ) -> dict[str, torch.Tensor]:
-    """Loss over exact exported BMP pixels, normalized per trainable file."""
+    """Loss over exact exported BMP pixels, normalized per trainable file.
+
+    Pixels Cranamp never reads (per `configs/supported_pixels_classic.json`)
+    are excluded from both the loss and the per-file metrics, so the model
+    is only graded on what it actually has to reproduce.
+    """
     total = target_rgb.new_tensor(0.0)
     weighted_l1 = target_rgb.new_tensor(0.0)
     weighted_edge = target_rgb.new_tensor(0.0)
@@ -48,6 +60,8 @@ def exported_files_loss(
     unweighted_hit5 = target_rgb.new_tensor(0.0)
     total_weight = 0.0
     metrics: dict[str, torch.Tensor] = {}
+
+    support_masks = load_support_masks()
 
     for spec in specs:
         if spec.file_name not in file_logits:
@@ -59,15 +73,34 @@ def exported_files_loss(
                 f"{spec.file_name} prediction shape {tuple(pred_rgb.shape)} "
                 f"does not match target crop {tuple(target_crop.shape)}"
             )
-        l1 = (pred_rgb - target_crop).abs().mean()
-        edge = sobel_l1(pred_rgb, target_crop)
+        # Custom synthetic specs (used in tests) may not appear in the static
+        # support profile; default to "every pixel supported" for them.
+        cached_mask = support_masks.get(spec.file_name)
+        if cached_mask is not None and cached_mask.shape == target_crop.shape[-2:]:
+            mask = cached_mask.to(device=target_crop.device)
+        else:
+            mask = torch.ones(target_crop.shape[-2:], dtype=torch.bool, device=target_crop.device)
+        mask_f = mask.to(target_crop.dtype)
+
+        diff = (pred_rgb - target_crop).abs()
+        l1 = _masked_mean(diff, mask_f)
+
+        # Substitute the target inside masked-out pixels so Sobel gradients on
+        # supported pixels do not leak from unsupported neighbors.
+        pred_for_edges = pred_rgb * mask_f + target_crop.detach() * (1 - mask_f)
+        edge_diff = (sobel_edges(pred_for_edges) - sobel_edges(target_crop)).abs()
+        edge = _masked_mean(edge_diff, mask_f)
+
         file_loss = l1 + edge_weight * edge
         weight = float(spec.weight)
         total = total + weight * file_loss
         weighted_l1 = weighted_l1 + weight * l1
         weighted_edge = weighted_edge + weight * edge
-        hit5 = ((pred_rgb - target_crop).abs() <= (5.0 / 255.0)).float().mean()
+
+        hit5_per_chan = (diff <= (5.0 / 255.0)).to(target_crop.dtype)
+        hit5 = _masked_mean(hit5_per_chan, mask_f)
         weighted_hit5 = weighted_hit5 + weight * hit5
+
         unweighted_l1 = unweighted_l1 + l1
         unweighted_edge = unweighted_edge + edge
         unweighted_hit5 = unweighted_hit5 + hit5
