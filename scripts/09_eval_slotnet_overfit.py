@@ -108,7 +108,8 @@ def main() -> int:
                 support_f = support.to(target_file.dtype)
                 support_pixels = float(support.sum().clamp(min=1))
                 channels = pred_file.shape[1]
-                support_denom = support_pixels * channels
+                batch = pred_file.shape[0]
+                support_denom = support_pixels * channels * batch
                 mae = float((file_abs * support_f).sum().detach().cpu() / support_denom)
                 pred_for_edges = pred_file * support_f + target_file * (1 - support_f)
                 edge_diff = (sobel_edges(pred_for_edges) - sobel_edges(target_file)).abs()

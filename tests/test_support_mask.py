@@ -76,6 +76,22 @@ def test_loss_is_sensitive_inside_support_mask():
     assert bumped["mae_pledit"] > base["mae_pledit"]
 
 
+def test_metrics_invariant_to_batch_size():
+    # Same content repeated across a batch must report the same metric as a single sample.
+    files1 = {
+        s.file_name: torch.full((1, 3, s.h, s.w), 0.4, requires_grad=True)
+        for s in TRAINABLE_EXPORT_SPECS
+    }
+    files2 = {k: v.detach().repeat(2, 1, 1, 1).requires_grad_() for k, v in files1.items()}
+    target1 = torch.full((1, 3, 1024, 1024), 0.5)
+    target2 = target1.repeat(2, 1, 1, 1)
+
+    m1 = exported_files_loss(files1, target1)
+    m2 = exported_files_loss(files2, target2)
+    for key in ("mae_pledit", "mae_main", "exported_l1", "total"):
+        assert torch.allclose(m1[key], m2[key], atol=1e-7), key
+
+
 def test_unsupported_pixels_receive_zero_gradient():
     files, target = _half_baseline_files()
     masks = load_support_masks()

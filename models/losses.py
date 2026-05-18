@@ -33,8 +33,11 @@ def sobel_l1(pred_rgb: torch.Tensor, target_rgb: torch.Tensor) -> torch.Tensor:
 
 
 def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    """Mean over True positions in mask, broadcast across batch+channel dims."""
-    denom = mask.sum().clamp(min=1).to(values.dtype) * values.shape[1]
+    """Mean over True mask positions, averaged across batch and channel dims."""
+    pixels = mask.sum().clamp(min=1).to(values.dtype)
+    batch = float(values.shape[0])
+    channels = float(values.shape[1])
+    denom = pixels * batch * channels
     return (values * mask).sum() / denom
 
 
