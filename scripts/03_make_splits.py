@@ -41,7 +41,7 @@ def collect_samples(data: Path, valid_rows: list[dict[str, str]]) -> list[dict[s
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data_v34")
+    parser.add_argument("--data", default="data_v35")
     parser.add_argument("--valid-skins", default=None)
     parser.add_argument("--out", default=None)
     parser.add_argument("--train", type=float, default=0.80)

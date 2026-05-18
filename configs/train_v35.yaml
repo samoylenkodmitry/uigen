@@ -1,0 +1,32 @@
+input:
+  width: 960
+  height: 1728
+atlas:
+  width: 1024
+  height: 1024
+  profile: configs/atlas_train_v1.json
+export:
+  profile: configs/export_profile_classic.json
+  trainable_spec: atlas_ai/export_spec.py
+data:
+  root: data_v35
+  split_by: skin_id
+slotnet:
+  version: 35
+  output: exported_bmp_tensors
+  active_files:
+    - MAIN.bmp
+    - TITLEBAR.bmp
+    - CBUTTONS.bmp
+    - SHUFREP.bmp
+    - MONOSTER.bmp
+    - PLAYPAUS.bmp
+    - EQMAIN.bmp
+    - PLEDIT.bmp
+    - POSBAR.bmp
+    - VOLUME.bmp
+    - BALANCE.bmp
+loss:
+  rgb: exported_file_l1
+  edge: sobel_l1
+  edge_weight: 1.5

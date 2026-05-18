@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Mockup image -> V3.4 RGB atlas -> classic skin.wsz."""
+"""Mockup image -> SlotNet skin files -> classic skin.wsz."""
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 
@@ -13,30 +14,48 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from atlas_ai.export import export_atlas_to_skin
+from atlas_ai.export_spec import blank_atlas_like_files
 from atlas_ai.profiles import load_atlas_profile, load_export_profile
 from models.slotnet_v34 import SlotNetV34
+from models.slotnet_v35 import SlotNetV35
 
 
 INPUT_H = 1728
 INPUT_W = 960
 
 
-def detect_base_channels(ckpt_path: Path) -> int:
+@dataclass(frozen=True)
+class CheckpointInfo:
+    version: int
+    base_channels: int
+    style_dim: int | None = None
+    head_channels: int | None = None
+
+
+def detect_checkpoint_info(ckpt_path: Path) -> CheckpointInfo:
     try:
         from safetensors.torch import safe_open
         with safe_open(str(ckpt_path), framework="pt", device="cpu") as f:
             version = int(f.get_tensor("slotnet_version").reshape(-1)[0].item())
-            if version != 34:
-                raise SystemExit(f"checkpoint is SlotNet version {version}, expected 34")
-            return int(f.get_tensor("enc1.0.weight").shape[0])
-    except SystemExit:
-        raise
+            base_channels = int(f.get_tensor("enc1.0.weight").shape[0])
+            if version == 35:
+                style_dim = int(f.get_tensor("style_proj.0.weight").shape[0])
+                head_channels = int(f.get_tensor("heads.main.body.0.weight").shape[0])
+                return CheckpointInfo(version, base_channels, style_dim, head_channels)
+            return CheckpointInfo(version, base_channels)
     except Exception:
         state = torch.load(str(ckpt_path), map_location="cpu")
         version = int(state["slotnet_version"].reshape(-1)[0].item())
-        if version != 34:
-            raise SystemExit(f"checkpoint is SlotNet version {version}, expected 34")
-        return int(state["enc1.0.weight"].shape[0])
+        base_channels = int(state["enc1.0.weight"].shape[0])
+        if version == 35:
+            style_dim = int(state["style_proj.0.weight"].shape[0])
+            head_channels = int(state["heads.main.body.0.weight"].shape[0])
+            return CheckpointInfo(version, base_channels, style_dim, head_channels)
+        return CheckpointInfo(version, base_channels)
+
+
+def detect_base_channels(ckpt_path: Path) -> int:
+    return detect_checkpoint_info(ckpt_path).base_channels
 
 
 def letterbox_to_canvas(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
@@ -74,6 +93,8 @@ def main() -> int:
     parser.add_argument("--export-profile", default="configs/export_profile_classic.json")
     parser.add_argument("--default-skin", default="assets/default_skin")
     parser.add_argument("--slotnet-base-channels", type=int, default=None)
+    parser.add_argument("--slotnet-style-dim", type=int, default=None)
+    parser.add_argument("--slotnet-head-channels", type=int, default=None)
     parser.add_argument("--out", required=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
@@ -89,13 +110,27 @@ def main() -> int:
     with Image.open(args.image) as src:
         canvas = letterbox_to_canvas(src.convert("RGB"), INPUT_W, INPUT_H)
 
-    base_channels = args.slotnet_base_channels or detect_base_channels(Path(args.slotnet))
-    model = SlotNetV34(atlas_profile=atlas_profile, base_channels=base_channels).to(device)
+    ckpt_info = detect_checkpoint_info(Path(args.slotnet))
+    base_channels = args.slotnet_base_channels or ckpt_info.base_channels
+    if ckpt_info.version == 34:
+        model = SlotNetV34(atlas_profile=atlas_profile, base_channels=base_channels).to(device)
+    elif ckpt_info.version == 35:
+        model = SlotNetV35(
+            base_channels=base_channels,
+            style_dim=args.slotnet_style_dim or ckpt_info.style_dim or 192,
+            head_channels=args.slotnet_head_channels or ckpt_info.head_channels,
+        ).to(device)
+    else:
+        raise SystemExit(f"unsupported SlotNet version {ckpt_info.version}")
     load_checkpoint(model, Path(args.slotnet))
     model.eval()
     with torch.no_grad():
-        logits = model(image_to_tensor(canvas, device))["prediction"][0]
-        rgb = logits.sigmoid().clamp(0, 1)
+        output = model(image_to_tensor(canvas, device))
+        if ckpt_info.version == 34:
+            rgb = output["prediction"][0].sigmoid().clamp(0, 1)
+        else:
+            files = {name: logits[0].sigmoid().clamp(0, 1) for name, logits in output["files"].items()}
+            rgb = blank_atlas_like_files(files)
 
     atlas_arr = (rgb.cpu().numpy().transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
     atlas_path = out / "atlas.png"

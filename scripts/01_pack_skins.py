@@ -19,7 +19,7 @@ def main() -> int:
     parser.add_argument("--atlas-profile", default="configs/atlas_train_v1.json")
     parser.add_argument("--export-profile", default="configs/export_profile_classic.json")
     parser.add_argument("--default-skin", default="assets/default_skin")
-    parser.add_argument("--out", default="data_v34")
+    parser.add_argument("--out", default="data_v35")
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 

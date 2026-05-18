@@ -16,7 +16,7 @@ from atlas_ai.profiles import load_atlas_profile
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default=None)
-    parser.add_argument("--valid-skins", default="data_v34/valid_skins.csv")
+    parser.add_argument("--valid-skins", default="data_v35/valid_skins.csv")
     parser.add_argument("--atlas-profile", default="configs/atlas_train_v1.json")
     args = parser.parse_args()
 

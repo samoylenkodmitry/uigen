@@ -35,9 +35,9 @@ def _render_one(args_tuple: tuple[str, str, int, str, int, int, str]) -> tuple[s
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--valid-skins", default="data_v34/valid_skins.csv")
+    parser.add_argument("--valid-skins", default="data_v35/valid_skins.csv")
     parser.add_argument("--cranamp-cli", default="cranamp_cli/cranamp-cli")
-    parser.add_argument("--out", default="data_v34")
+    parser.add_argument("--out", default="data_v35")
     parser.add_argument("--variants", type=int, default=4)
     parser.add_argument("--canvas-w", type=int, default=960)
     parser.add_argument("--canvas-h", type=int, default=1728)

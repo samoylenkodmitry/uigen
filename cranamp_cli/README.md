@@ -11,7 +11,7 @@ the roadmap commands:
 
 The first implementation is a deterministic classic-skin compositor built from
 Cranamp's Winamp sprite constants and skin loading behavior. It renders main,
-EQ, and playlist windows. For the V3.4 training pipeline, the only persisted
+EQ, and playlist windows. For the V3.5 training pipeline, the only persisted
 training input is the rendered PNG; random render parameters are intentionally
 not saved.
 
