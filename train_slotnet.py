@@ -34,6 +34,7 @@ from atlas_ai.export_spec import (
 )
 from models.losses import exported_files_loss
 from models.slotnet_v35 import SlotNetV35
+from models.slotnet_v5 import SlotNetV5
 
 
 def set_seeds(seed: int) -> None:
@@ -193,6 +194,15 @@ def main() -> int:
     parser.add_argument("--base-channels", type=int, default=24)
     parser.add_argument("--style-dim", type=int, default=192)
     parser.add_argument("--head-channels", type=int, default=None)
+    parser.add_argument("--model-version", type=int, default=35, choices=[35, 50])
+    parser.add_argument("--attn-dim", type=int, default=128,
+                        help="V5 cross-attention embed dim (ignored for V35).")
+    parser.add_argument("--attention-heads", type=int, default=4,
+                        help="V5 number of attention heads (ignored for V35).")
+    parser.add_argument("--cross-attention-layers", type=int, default=1,
+                        help="V5 number of cross-attention layers (ignored for V35).")
+    parser.add_argument("--file-embedding-dim", type=int, default=32,
+                        help="V5 per-file embedding dim (ignored for V35).")
     parser.add_argument("--edge-weight", type=float, default=1.5)
     parser.add_argument("--file-weights-yaml", default=None)
     parser.add_argument("--out", default="runs/slotnet_v35")
@@ -227,11 +237,24 @@ def main() -> int:
     if args.file_weights_yaml:
         specs = with_file_weights(load_file_weight_overrides(args.file_weights_yaml), specs)
 
-    model = SlotNetV35(
-        base_channels=args.base_channels,
-        style_dim=args.style_dim,
-        head_channels=args.head_channels,
-    ).to(device)
+    if args.model_version == 35:
+        model = SlotNetV35(
+            base_channels=args.base_channels,
+            style_dim=args.style_dim,
+            head_channels=args.head_channels,
+        ).to(device)
+    elif args.model_version == 50:
+        model = SlotNetV5(
+            base_channels=args.base_channels,
+            style_dim=args.style_dim,
+            head_channels=args.head_channels,
+            attn_dim=args.attn_dim,
+            attention_heads=args.attention_heads,
+            cross_attention_layers=args.cross_attention_layers,
+            file_embedding_dim=args.file_embedding_dim,
+        ).to(device)
+    else:
+        raise SystemExit(f"unsupported --model-version {args.model_version}")
     if args.resume:
         model.load_state_dict(load_state_dict(Path(args.resume)))
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -261,7 +284,7 @@ def main() -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     config = vars(args).copy()
-    config["model_version"] = 35
+    config["model_version"] = args.model_version
     config["git_commit"] = git_commit_hash()
     config["train_dataset"] = dataset_summary(dataset, args.train)
     config["val_dataset"] = dataset_summary(val_dataset, args.val_csv) if val_dataset is not None else None
@@ -337,8 +360,9 @@ def main() -> int:
     except KeyboardInterrupt:
         print("interrupted; saving last")
     save_state_dict(out / "last.safetensors", model.state_dict())
+    version_label = {35: "SlotNetV3.5", 50: "SlotNetV5"}.get(args.model_version, f"SlotNet({args.model_version})")
     print(
-        f"trained SlotNetV3.5 for {step} step(s); "
+        f"trained {version_label} for {step} step(s); "
         f"last loss {metric.get('total', float('nan')):.6f}"
     )
     return 0

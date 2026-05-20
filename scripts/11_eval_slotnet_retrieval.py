@@ -20,9 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from atlas_ai.dataset import RenderDataset, image_to_tensor
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS, crop_export_target
 from atlas_ai.support_mask import load_support_masks
-from infer_skin import detect_checkpoint_info, load_checkpoint
-from models.slotnet_v34 import SlotNetV34
-from models.slotnet_v35 import SlotNetV35
+from infer_skin import CheckpointInfo, build_model_from_info, detect_checkpoint_info, load_checkpoint
 from atlas_ai.profiles import load_atlas_profile
 
 
@@ -82,17 +80,18 @@ def main() -> int:
         for name, mask in load_support_masks().items()
     }
     ckpt_info = detect_checkpoint_info(Path(args.slotnet))
-    base_channels = args.base_channels or ckpt_info.base_channels
-    if ckpt_info.version == 34:
-        model = SlotNetV34(atlas_profile=atlas_profile, base_channels=base_channels).to(device)
-    elif ckpt_info.version == 35:
-        model = SlotNetV35(
-            base_channels=base_channels,
-            style_dim=ckpt_info.style_dim or 192,
+    if args.base_channels:
+        ckpt_info = CheckpointInfo(
+            version=ckpt_info.version,
+            base_channels=args.base_channels,
+            style_dim=ckpt_info.style_dim,
             head_channels=ckpt_info.head_channels,
-        ).to(device)
-    else:
-        raise SystemExit(f"unsupported SlotNet version {ckpt_info.version}")
+            attn_dim=ckpt_info.attn_dim,
+            attention_heads=ckpt_info.attention_heads,
+            cross_attention_layers=ckpt_info.cross_attention_layers,
+            file_embedding_dim=ckpt_info.file_embedding_dim,
+        )
+    model = build_model_from_info(ckpt_info, device=device, atlas_profile=atlas_profile)
     load_checkpoint(model, Path(args.slotnet))
     model.eval()
 

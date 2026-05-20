@@ -18,6 +18,7 @@ from atlas_ai.export_spec import blank_atlas_like_files
 from atlas_ai.profiles import load_atlas_profile, load_export_profile
 from models.slotnet_v34 import SlotNetV34
 from models.slotnet_v35 import SlotNetV35
+from models.slotnet_v5 import SlotNetV5
 
 
 INPUT_H = 1728
@@ -30,28 +31,82 @@ class CheckpointInfo:
     base_channels: int
     style_dim: int | None = None
     head_channels: int | None = None
+    attn_dim: int | None = None
+    attention_heads: int | None = None
+    cross_attention_layers: int | None = None
+    file_embedding_dim: int | None = None
+    frequencies: tuple[int, ...] | None = None
+
+
+def _info_from_state(get) -> CheckpointInfo:
+    """Build a CheckpointInfo using a tensor accessor (file or dict)."""
+    version = int(get("slotnet_version").reshape(-1)[0].item())
+    base_channels = int(get("enc1.0.weight").shape[0])
+    if version == 35:
+        style_dim = int(get("style_proj.0.weight").shape[0])
+        head_channels = int(get("heads.main.body.0.weight").shape[0])
+        return CheckpointInfo(version, base_channels, style_dim, head_channels)
+    if version == 50:
+        style_dim = int(get("style_proj.0.weight").shape[0])
+        attn_dim = int(get("feature_proj.weight").shape[0])
+        attention_heads = int(get("attention_heads_buffer").reshape(-1)[0].item())
+        cross_attention_layers = int(get("cross_attention_layers_buffer").reshape(-1)[0].item())
+        file_embedding_dim = int(get("file_embedding.weight").shape[1])
+        head_channels = int(get("heads.main.decoder.0.weight").shape[0])
+        try:
+            frequencies = tuple(int(x) for x in get("frequencies_buffer").reshape(-1).tolist())
+        except Exception:
+            frequencies = None
+        return CheckpointInfo(
+            version,
+            base_channels,
+            style_dim=style_dim,
+            head_channels=head_channels,
+            attn_dim=attn_dim,
+            attention_heads=attention_heads,
+            cross_attention_layers=cross_attention_layers,
+            file_embedding_dim=file_embedding_dim,
+            frequencies=frequencies,
+        )
+    return CheckpointInfo(version, base_channels)
 
 
 def detect_checkpoint_info(ckpt_path: Path) -> CheckpointInfo:
     try:
         from safetensors.torch import safe_open
         with safe_open(str(ckpt_path), framework="pt", device="cpu") as f:
-            version = int(f.get_tensor("slotnet_version").reshape(-1)[0].item())
-            base_channels = int(f.get_tensor("enc1.0.weight").shape[0])
-            if version == 35:
-                style_dim = int(f.get_tensor("style_proj.0.weight").shape[0])
-                head_channels = int(f.get_tensor("heads.main.body.0.weight").shape[0])
-                return CheckpointInfo(version, base_channels, style_dim, head_channels)
-            return CheckpointInfo(version, base_channels)
+            return _info_from_state(f.get_tensor)
     except Exception:
         state = torch.load(str(ckpt_path), map_location="cpu")
-        version = int(state["slotnet_version"].reshape(-1)[0].item())
-        base_channels = int(state["enc1.0.weight"].shape[0])
-        if version == 35:
-            style_dim = int(state["style_proj.0.weight"].shape[0])
-            head_channels = int(state["heads.main.body.0.weight"].shape[0])
-            return CheckpointInfo(version, base_channels, style_dim, head_channels)
-        return CheckpointInfo(version, base_channels)
+        return _info_from_state(state.__getitem__)
+
+
+def build_model_from_info(info: CheckpointInfo, *, device: torch.device, atlas_profile=None):
+    """Construct the right SlotNet variant given a checkpoint info."""
+    if info.version == 34:
+        if atlas_profile is None:
+            raise ValueError("V3.4 dispatch needs atlas_profile")
+        return SlotNetV34(atlas_profile=atlas_profile, base_channels=info.base_channels).to(device)
+    if info.version == 35:
+        return SlotNetV35(
+            base_channels=info.base_channels,
+            style_dim=info.style_dim or 192,
+            head_channels=info.head_channels,
+        ).to(device)
+    if info.version == 50:
+        kwargs = {
+            "base_channels": info.base_channels,
+            "style_dim": info.style_dim or 192,
+            "head_channels": info.head_channels,
+            "attn_dim": info.attn_dim or 128,
+            "attention_heads": info.attention_heads or 4,
+            "cross_attention_layers": info.cross_attention_layers or 1,
+            "file_embedding_dim": info.file_embedding_dim or 32,
+        }
+        if info.frequencies:
+            kwargs["frequencies"] = info.frequencies
+        return SlotNetV5(**kwargs).to(device)
+    raise ValueError(f"unsupported SlotNet version {info.version}")
 
 
 def detect_base_channels(ckpt_path: Path) -> int:
@@ -111,17 +166,18 @@ def main() -> int:
         canvas = letterbox_to_canvas(src.convert("RGB"), INPUT_W, INPUT_H)
 
     ckpt_info = detect_checkpoint_info(Path(args.slotnet))
-    base_channels = args.slotnet_base_channels or ckpt_info.base_channels
-    if ckpt_info.version == 34:
-        model = SlotNetV34(atlas_profile=atlas_profile, base_channels=base_channels).to(device)
-    elif ckpt_info.version == 35:
-        model = SlotNetV35(
-            base_channels=base_channels,
-            style_dim=args.slotnet_style_dim or ckpt_info.style_dim or 192,
+    if args.slotnet_base_channels or args.slotnet_style_dim or args.slotnet_head_channels:
+        ckpt_info = CheckpointInfo(
+            version=ckpt_info.version,
+            base_channels=args.slotnet_base_channels or ckpt_info.base_channels,
+            style_dim=args.slotnet_style_dim or ckpt_info.style_dim,
             head_channels=args.slotnet_head_channels or ckpt_info.head_channels,
-        ).to(device)
-    else:
-        raise SystemExit(f"unsupported SlotNet version {ckpt_info.version}")
+            attn_dim=ckpt_info.attn_dim,
+            attention_heads=ckpt_info.attention_heads,
+            cross_attention_layers=ckpt_info.cross_attention_layers,
+            file_embedding_dim=ckpt_info.file_embedding_dim,
+        )
+    model = build_model_from_info(ckpt_info, device=device, atlas_profile=atlas_profile)
     load_checkpoint(model, Path(args.slotnet))
     model.eval()
     with torch.no_grad():
