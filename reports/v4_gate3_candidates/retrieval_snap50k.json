@@ -1,0 +1,75 @@
+{
+  "max_true_exported_pixels_mae": 0.07326183468103409,
+  "median_true_exported_pixels_mae": 0.03899005800485611,
+  "min_true_exported_pixels_mae": 0.011774664744734764,
+  "per_skin_hits": {
+    "a_halo_so_bright_it_bleeds_3ee84993": {
+      "hits": 32,
+      "total": 32
+    },
+    "aguileramp_oldschool_2e1e7540": {
+      "hits": 32,
+      "total": 32
+    },
+    "blair_razor_project_e7dd3210": {
+      "hits": 32,
+      "total": 32
+    },
+    "cyborg_5569c5cf": {
+      "hits": 32,
+      "total": 32
+    },
+    "darkside_127876f0": {
+      "hits": 32,
+      "total": 32
+    },
+    "dragonzv30amp_85acc35c": {
+      "hits": 32,
+      "total": 32
+    },
+    "engraved4_platinum_5638acf5": {
+      "hits": 32,
+      "total": 32
+    },
+    "goodgawd_bba84deb": {
+      "hits": 32,
+      "total": 32
+    },
+    "infected_fx_gray_no_transparency_9f3bd211": {
+      "hits": 32,
+      "total": 32
+    },
+    "minimalistic_black_145917e6": {
+      "hits": 32,
+      "total": 32
+    },
+    "rancid_amp_5_42a78437": {
+      "hits": 32,
+      "total": 32
+    },
+    "ruki2_by_michi_caa5bfe3": {
+      "hits": 32,
+      "total": 32
+    },
+    "simblyblayit_ff648b6c": {
+      "hits": 32,
+      "total": 32
+    },
+    "the_four_horsemen_523e6bdf": {
+      "hits": 32,
+      "total": 32
+    },
+    "tvxq_winamp_skins_by_roseweedy_c379f7bd": {
+      "hits": 32,
+      "total": 32
+    },
+    "zelda_amp_gold_3cc38af4": {
+      "hits": 32,
+      "total": 32
+    }
+  },
+  "samples": 512,
+  "slotnet_version": 35,
+  "target_skins": 16,
+  "top1_accuracy": 1.0
+}
