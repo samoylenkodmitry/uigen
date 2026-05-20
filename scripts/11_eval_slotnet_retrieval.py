@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from atlas_ai.dataset import RenderDataset, image_to_tensor
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS, crop_export_target
+from atlas_ai.support_mask import load_support_masks
 from infer_skin import detect_checkpoint_info, load_checkpoint
 from models.slotnet_v34 import SlotNetV34
 from models.slotnet_v35 import SlotNetV35
@@ -38,10 +39,22 @@ def build_target_bank(rows: RenderDataset, device: torch.device) -> dict[str, di
     return bank
 
 
-def exported_mae(pred_files: dict[str, torch.Tensor], target_files: dict[str, torch.Tensor]) -> torch.Tensor:
+def exported_mae(
+    pred_files: dict[str, torch.Tensor],
+    target_files: dict[str, torch.Tensor],
+    support_masks: dict[str, torch.Tensor] | None = None,
+) -> torch.Tensor:
+    support_masks = support_masks or load_support_masks()
     file_maes = []
     for spec in TRAINABLE_EXPORT_SPECS:
-        file_maes.append((pred_files[spec.file_name] - target_files[spec.file_name]).abs().mean())
+        diff = (pred_files[spec.file_name] - target_files[spec.file_name]).abs()
+        mask = support_masks.get(spec.file_name)
+        if mask is None or mask.shape != diff.shape[-2:]:
+            file_maes.append(diff.mean())
+            continue
+        mask_f = mask.to(device=diff.device, dtype=torch.float32)
+        denom = mask_f.sum().clamp(min=1) * diff.shape[0] * diff.shape[1]
+        file_maes.append((diff.to(torch.float32) * mask_f).sum() / denom)
     return torch.stack(file_maes).mean()
 
 
@@ -64,6 +77,10 @@ def main() -> int:
 
     device = torch.device(args.device)
     atlas_profile = load_atlas_profile(args.atlas_profile)
+    support_masks = {
+        name: mask.to(device=device)
+        for name, mask in load_support_masks().items()
+    }
     ckpt_info = detect_checkpoint_info(Path(args.slotnet))
     base_channels = args.base_channels or ckpt_info.base_channels
     if ckpt_info.version == 34:
@@ -102,7 +119,7 @@ def main() -> int:
                 }
 
             distances = {
-                skin_id: float(exported_mae(pred_files, target_files).detach().cpu())
+                skin_id: float(exported_mae(pred_files, target_files, support_masks).detach().cpu())
                 for skin_id, target_files in target_bank.items()
             }
             predicted_skin = min(distances, key=distances.get)
