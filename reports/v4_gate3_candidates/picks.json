@@ -1,0 +1,275 @@
+{
+  "seed": 20260520,
+  "pool_size": 500,
+  "skins_considered": 444,
+  "anchors": [
+    "darkside.wsz",
+    "Aguileramp_-_OldSchool.wsz",
+    "Zelda_Amp_Gold.wsz"
+  ],
+  "picks": [
+    {
+      "skin": "darkside.wsz",
+      "main_size": [
+        275,
+        315
+      ],
+      "L_mean": 32.38151550292969,
+      "L_std": 50.733909606933594,
+      "saturation": 0.1030580997467041,
+      "palette_estimate": 446,
+      "log_palette": 2.649334858712142,
+      "edge_density": 0.038918133825063705,
+      "rank": 0,
+      "is_anchor": true,
+      "reason": "Gate 2 anchor"
+    },
+    {
+      "skin": "Aguileramp_-_OldSchool.wsz",
+      "main_size": [
+        275,
+        315
+      ],
+      "L_mean": 194.9569549560547,
+      "L_std": 86.94351196289062,
+      "saturation": 0.25946110486984253,
+      "palette_estimate": 463,
+      "log_palette": 2.6655809910179533,
+      "edge_density": 0.06259015202522278,
+      "rank": 1,
+      "is_anchor": true,
+      "reason": "Gate 2 anchor"
+    },
+    {
+      "skin": "Zelda_Amp_Gold.wsz",
+      "main_size": [
+        275,
+        315
+      ],
+      "L_mean": 56.150901794433594,
+      "L_std": 54.79790496826172,
+      "saturation": 0.8931679129600525,
+      "palette_estimate": 713,
+      "log_palette": 2.8530895298518657,
+      "edge_density": 0.04581832140684128,
+      "rank": 2,
+      "is_anchor": true,
+      "reason": "Gate 2 anchor"
+    },
+    {
+      "skin": "GoodGawd.wsz",
+      "main_size": [
+        275,
+        315
+      ],
+      "L_mean": 140.8658905029297,
+      "L_std": 123.93531036376953,
+      "saturation": 0.9983419179916382,
+      "palette_estimate": 85,
+      "log_palette": 1.9294189257142929,
+      "edge_density": 0.0933489054441452,
+      "rank": 3,
+      "is_anchor": false,
+      "reason": "mid-tone/high-contrast/saturated"
+    },
+    {
+      "skin": "The_Four_Horsemen.wsz",
+      "main_size": [
+        275,
+        315
+      ],
+      "L_mean": 93.72843170166016,
+      "L_std": 88.33956909179688,
+      "saturation": 0.4061964154243469,
+      "palette_estimate": 195,
+      "log_palette": 2.290034611362518,
+      "edge_density": 0.17471089959144592,
+      "rank": 4,
+      "is_anchor": false,
+      "reason": "mid-tone/high-contrast/busy-texture"
+    },
+    {
+      "skin": "engraved4_platinum.wsz",
+      "main_size": [
+        275,
+        313
+      ],
+      "L_mean": 228.026611328125,
+      "L_std": 26.55582618713379,
+      "saturation": 0.08610259741544724,
+      "palette_estimate": 95,
+      "log_palette": 1.9777236052888478,
+      "edge_density": 0.011935418471693993,
+      "rank": 5,
+      "is_anchor": false,
+      "reason": "bright/low-contrast/muted/flat-ui"
+    },
+    {
+      "skin": "minimalistic_black.wsz",
+      "main_size": [
+        275,
+        315
+      ],
+      "L_mean": 106.06451416015625,
+      "L_std": 68.93531799316406,
+      "saturation": 0.47373732924461365,
+      "palette_estimate": 30,
+      "log_palette": 1.4771212547196624,
+      "edge_density": 0.024202238768339157,
+      "rank": 6,
+      "is_anchor": false,
+      "reason": "mid-tone/low-palette/flat-ui"
+    },
+    {
+      "skin": "a_halo_so_bright_it_bleeds.wsz",
+      "main_size": [
+        275,
+        163
+      ],
+      "L_mean": 93.70974731445312,
+      "L_std": 99.23456573486328,
+      "saturation": 0.5995198488235474,
+      "palette_estimate": 3629,
+      "log_palette": 3.5597869682005565,
+      "edge_density": 0.11856511235237122,
+      "rank": 7,
+      "is_anchor": false,
+      "reason": "mid-tone/high-contrast/saturated/photographic-palette"
+    },
+    {
+      "skin": "Cyborg.wsz",
+      "main_size": [
+        275,
+        163
+      ],
+      "L_mean": 153.28684997558594,
+      "L_std": 46.27132797241211,
+      "saturation": 0.08552089333534241,
+      "palette_estimate": 4090,
+      "log_palette": 3.611723308007342,
+      "edge_density": 0.039216045290231705,
+      "rank": 8,
+      "is_anchor": false,
+      "reason": "mid-tone/muted/photographic-palette/flat-ui"
+    },
+    {
+      "skin": "Rancid_Amp_5.wsz",
+      "main_size": [
+        275,
+        294
+      ],
+      "L_mean": 73.64671325683594,
+      "L_std": 105.60301971435547,
+      "saturation": 0.04883880168199539,
+      "palette_estimate": 361,
+      "log_palette": 2.5575072019056577,
+      "edge_density": 0.08978205919265747,
+      "rank": 9,
+      "is_anchor": false,
+      "reason": "mid-tone/high-contrast/muted"
+    },
+    {
+      "skin": "tvxq_winamp_skins_by_roseweedy.wsz",
+      "main_size": [
+        275,
+        116
+      ],
+      "L_mean": 191.8464813232422,
+      "L_std": 82.52487182617188,
+      "saturation": 0.07283671200275421,
+      "palette_estimate": 1075,
+      "log_palette": 3.031408464251624,
+      "edge_density": 0.15330830216407776,
+      "rank": 10,
+      "is_anchor": false,
+      "reason": "bright/high-contrast/muted/busy-texture"
+    },
+    {
+      "skin": "simblyblayit.wsz",
+      "main_size": [
+        275,
+        164
+      ],
+      "L_mean": 160.20223999023438,
+      "L_std": 96.22001647949219,
+      "saturation": 0.7837322354316711,
+      "palette_estimate": 367,
+      "log_palette": 2.5646660642520893,
+      "edge_density": 0.03266143426299095,
+      "rank": 11,
+      "is_anchor": false,
+      "reason": "mid-tone/high-contrast/saturated/flat-ui"
+    },
+    {
+      "skin": "Infected FX - Gray No Transparency.wsz",
+      "main_size": [
+        275,
+        315
+      ],
+      "L_mean": 129.81668090820312,
+      "L_std": 55.56893539428711,
+      "saturation": 0.0,
+      "palette_estimate": 147,
+      "log_palette": 2.167317334748176,
+      "edge_density": 0.08160873502492905,
+      "rank": 12,
+      "is_anchor": false,
+      "reason": "mid-tone/muted"
+    },
+    {
+      "skin": "Ruki2 by michi.wsz",
+      "main_size": [
+        275,
+        163
+      ],
+      "L_mean": 99.99848175048828,
+      "L_std": 73.14430236816406,
+      "saturation": 0.5839021801948547,
+      "palette_estimate": 4572,
+      "log_palette": 3.660106221723244,
+      "edge_density": 0.03935869410634041,
+      "rank": 13,
+      "is_anchor": false,
+      "reason": "mid-tone/saturated/photographic-palette/flat-ui"
+    },
+    {
+      "skin": "DragonZV30amp.wsz",
+      "main_size": [
+        275,
+        315
+      ],
+      "L_mean": 73.98054504394531,
+      "L_std": 75.49609375,
+      "saturation": 0.4903806746006012,
+      "palette_estimate": 213,
+      "log_palette": 2.3283796034387376,
+      "edge_density": 0.09040874242782593,
+      "rank": 14,
+      "is_anchor": false,
+      "reason": "mid-tone/high-contrast"
+    },
+    {
+      "skin": "blair_razor_project.wsz",
+      "main_size": [
+        275,
+        116
+      ],
+      "L_mean": 61.343196868896484,
+      "L_std": 37.57378387451172,
+      "saturation": 0.13262630999088287,
+      "palette_estimate": 3693,
+      "log_palette": 3.5673793076509788,
+      "edge_density": 0.08222967386245728,
+      "rank": 15,
+      "is_anchor": false,
+      "reason": "mid-tone/photographic-palette"
+    }
+  ],
+  "feature_keys": [
+    "L_mean",
+    "L_std",
+    "saturation",
+    "log_palette",
+    "edge_density"
+  ]
+}
