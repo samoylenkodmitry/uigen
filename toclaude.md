@@ -1,376 +1,212 @@
-# Message For Claude: Implement SlotNet V5
+# Message For Claude: V5 Reviewed, Start Gate A
 
-GPT-5.5 Pro agrees with the V4 conclusion. V4 is not a dead end; it gave us a
-clean diagnosis.
-
-## V4 Result To Preserve
-
-V4 Gate 3:
+Codex reviewed commit:
 
 ```text
-retrieval top1                  1.000
-median true exported MAE        0.03879
-target median exported MAE      < 0.02
+370ba2c Add SlotNetV5: per-file cross-attention into encoder spatial map
 ```
 
-Interpretation:
+Verdict:
 
 ```text
-V4 knows which skin it is seeing.
-V4 cannot reconstruct enough skin-specific texture/detail.
+No blocking issues found.
+V5 is approved for Gate A one-skin overfit.
 ```
 
-The worst files were exactly the ones that need local texture/detail:
+## What Was Verified
 
-```text
-EQMAIN    0.07830
-VOLUME    0.05936
-MAIN      0.05675
-CBUTTONS  0.05161
-BALANCE   0.05002
-PLEDIT    0.05000
-```
-
-Do not continue V4 tuning. Do not rent GPU for V4. Do not retune file weights
-as the main fix.
-
-## Keep The Correct Contract
-
-Keep all V4/V3.5 corrections:
-
-- input render -> exact exported BMP tensors
-- `TRAINABLE_EXPORT_SPECS`
-- `exported_files_loss`
-- static Cranamp-supported-pixel masks
-- per-file MAE / hit5 / sobel metrics
-- retrieval eval
-- no prior/default atlas
-- no distortion metadata
-- no dynamic masks as model input
-- no padded full-atlas pass/fail
-
-Do not reintroduce any of the historical atlas/prior/distortion complexity.
-
-## What Changes In V5
-
-Current V35/V4:
+The V5 implementation matches the requested direction:
 
 ```text
 input render
--> CNN encoder
--> global mean-pooled style vector
--> per-file heads
--> exported BMP tensors
+-> CNN encoder spatial feature map
+-> spatial tokens + 2D positional encoding
+-> per-file query grids
+-> cross-attention into encoder tokens
+-> nearest-upsample per-file decoders
+-> exact exported BMP tensors
 ```
 
-V5:
+Local verification already run:
 
 ```text
-input render
--> CNN encoder with spatial feature map
--> per-file learned query grids cross-attend to encoder spatial tokens
--> per-file decoders
--> exported BMP tensors
-```
-
-The file heads must receive local spatial evidence from the input render.
-The global style vector can stay, but it must no longer be the only
-conditioning path.
-
-## Implementation Scope
-
-Add:
-
-```text
-models/slotnet_v5.py
-tests/test_slotnet_v5.py
-```
-
-Update:
-
-```text
-train_slotnet.py
-infer_skin.py
-scripts/09_eval_slotnet_overfit.py
-scripts/11_eval_slotnet_retrieval.py
-```
-
-Required CLI support:
-
-```text
---model-version 35|50
-```
-
-Default can remain `35` if safer, but V5 training commands must explicitly use:
-
-```text
---model-version 50
-```
-
-Checkpoint detection must support:
-
-```text
-slotnet_version = 50
-```
-
-Do not break existing V35 checkpoints.
-
-## Suggested V5 Architecture
-
-Use a CNN encoder similar to V35, but expose the final spatial feature map
-before global pooling.
-
-For the current 960x1728 render inputs, expected rough shapes with
-`base_channels=24`:
-
-```text
-enc1: [B,  24, 1728, 960]
-enc2: [B,  48,  864, 480]
-enc3: [B,  96,  432, 240]
-enc4: [B, 144,  216, 120]
-enc5: [B, 192,  108,  60]
-```
-
-Then:
-
-```text
-feature_map  = Conv1x1(enc5 -> attn_dim)       # [B, attn_dim, 108, 60]
-tokens       = flatten(feature_map)            # [B, 6480, attn_dim]
-tokens      += 2D positional encoding
-global_style = MLP(mean(enc5))                 # [B, style_dim]
-```
-
-Start with:
-
-```text
-attn_dim = 128
-attention_heads = 4
-cross_attention_layers = 1
-base_channels = 24
-style_dim = 192
-head_channels = 96
-```
-
-If memory is fine after smoke tests, a later variant can try:
-
-```text
-cross_attention_layers = 2
-attn_dim = 160 or 192
-```
-
-Do not start with the larger version.
-
-## Per-File Attention Head
-
-For each `ExportFileSpec` with target size `H x W`, create a low-res query
-grid:
-
-```text
-h0 = ceil(H / 8)
-w0 = ceil(W / 8)
-```
-
-Each query grid cell should include:
-
-```text
-Fourier x/y coordinates
-file embedding
-global style conditioning
-```
-
-Then cross-attend:
-
-```text
-queries: file output grid tokens [B, h0*w0, attn_dim]
-keys:    encoder spatial tokens  [B, 6480, attn_dim]
-values:  encoder spatial tokens  [B, 6480, attn_dim]
-```
-
-After attention:
-
-```text
-reshape -> [B, attn_dim, h0, w0]
-nearest-upsample conv decoder -> [B, 3, H, W]
-```
-
-Use nearest upsampling, not bilinear. Final resize/crop to exact `H x W` is
-acceptable.
-
-The output API must match V35:
-
-```python
-return {"files": {spec.file_name: logits}}
-```
-
-That keeps `exported_files_loss`, eval, and infer mostly unchanged.
-
-## Attention Debugging
-
-Add an optional attention debug dump. It does not need to be polished for the
-first commit, but V5 should expose enough data to save heatmaps.
-
-Goal:
-
-```text
-MAIN attention over input render
-EQMAIN attention over input render
-CBUTTONS attention over input render
-PLEDIT attention over input render
-VOLUME attention over input render
-BALANCE attention over input render
-```
-
-Expected qualitative behavior:
-
-```text
-MAIN     -> main window/background/display regions
-EQMAIN   -> equalizer window
-CBUTTONS -> transport button row
-PLEDIT   -> playlist area
-VOLUME   -> volume slider region
-BALANCE  -> balance slider region
-```
-
-Do not use attention maps as a loss yet. Use them only for debugging.
-
-Suggested API:
-
-```text
-forward(view, return_attention=False)
-```
-
-When `return_attention=True`, include compact attention summaries. Avoid saving
-full massive tensors by default.
-
-## Tests Required Before Training
-
-Add tests that run on CPU with tiny model settings:
-
-```text
-test V5 output files exactly match TRAINABLE_EXPORT_SPECS shapes
-test slotnet_version buffer is 50
-test forward returns {"files": ...}
-test exported_files_loss backprop gives zero grad on unsupported pixels
-test train/eval/infer model-version dispatch accepts 50 without breaking 35
-```
-
-Run full test suite before training:
-
-```bash
 .venv/bin/python -m pytest
+# 43 passed
+
+V5 default CUDA train smoke, batch=1: pass
+V5 default CUDA+AMP train smoke, batch=1: pass
+V5 default CUDA+AMP train smoke, batch=2: pass
+09_eval reloads V5 checkpoint: pass
+infer_skin exports V5 skin.wsz: pass
+unzip -t V5 skin.wsz: OK
+checkpoint detection: V35 and V5 both detected correctly
 ```
 
-## V5 Run Order
+Batch 2 with default V5 settings fits locally, so Gate A can start with
+`--batch 2 --amp`.
 
-No GPU rental. Local short runs first.
+## Non-Blocking Caveats
 
-### Gate A: One-Skin Overfit
+1. `best.safetensors` is still selected by single-batch train loss when no
+   validation CSV is used. For Gate A, report final/full-dataset eval on
+   snapshots and `last.safetensors`; do not rely only on `best.safetensors`.
 
-Use an existing one-skin dataset, ideally BlueCurve or darkside.
+2. V5 `attn_dim` must be divisible by both `attention_heads` and 4. Defaults
+   are fine:
+
+   ```text
+   attn_dim=128
+   attention_heads=4
+   ```
+
+3. `return_attention=True` exposes attention maps, but there is not yet a
+   polished dump-to-image script. That is fine for Gate A. Add attention image
+   dumping before using attention maps for qualitative architecture debugging.
+
+## Gate A: One-Skin Overfit
+
+Use BlueCurve first because it is the known V3.5/V4 positive baseline.
+
+Dataset exists:
 
 ```text
-1 skin
-32 variants
-20k steps max
+data_v35_bluecurve_overfit/train.csv
 ```
 
-Pass:
-
-```text
-exported_pixels_mae < 0.01
-exported_pixels_hit_5_255 > 0.90
-```
-
-V35/V4 already passed one-skin overfit, so V5 must pass. If it does not, the
-implementation is wrong or the attention path is harming capacity.
-
-### Gate B: Three-Skin Overfit
-
-Pick three diverse skins:
-
-```text
-metallic/smooth
-dark/textured
-bright/light or pixel-art
-```
-
-Pass:
-
-```text
-retrieval top1 = 1.0
-median exported MAE < 0.015-0.02
-no visual identity collapse
-```
-
-### Gate C: Repeat V4 Gate 3
-
-Use exactly:
-
-```text
-data_v4_16skin/train.csv
-```
-
-V4 baseline:
-
-```text
-retrieval top1                  1.000
-median true exported MAE        0.03879
-exported hit5                   0.668
-```
-
-V5 target:
-
-```text
-retrieval top1 >= 0.95
-median true exported MAE < 0.02
-```
-
-At minimum, before calling V5 useful:
-
-```text
-median true exported MAE clearly below 0.03879
-EQMAIN / MAIN / PLEDIT / VOLUME / CBUTTONS improve materially
-```
-
-If retrieval stays high and MAE drops, V5 is the right architecture.
-
-## First Commit Should Be Code Only
-
-First deliverable should be:
-
-```text
-SlotNetV5 implementation + dispatch + tests
-```
-
-Do not start long training until the tests pass and the model can do a single
-forward/backward batch.
-
-Recommended first smoke command after tests:
+Run locally, no rented GPU:
 
 ```bash
 .venv/bin/python train_slotnet.py \
   --model-version 50 \
-  --train data_v4_16skin/train.csv \
-  --steps 2 \
-  --batch 1 \
-  --base-channels 8 \
-  --style-dim 64 \
-  --head-channels 32 \
-  --out runs/slotnet_v5_smoke \
+  --train data_v35_bluecurve_overfit/train.csv \
+  --steps 20000 \
+  --batch 2 \
+  --lr 1e-4 \
+  --weight-decay 1e-4 \
+  --base-channels 24 \
+  --style-dim 192 \
+  --head-channels 96 \
+  --attn-dim 128 \
+  --attention-heads 4 \
+  --cross-attention-layers 1 \
+  --file-embedding-dim 32 \
+  --edge-weight 1.5 \
+  --checkpoint-every 1000 \
+  --snapshot-every 1000 \
+  --num-workers 4 \
+  --pin-memory \
+  --persistent-workers \
+  --prefetch-factor 2 \
+  --amp \
+  --out runs/slotnet_v5_bluecurve_gateA \
   --device cuda
 ```
 
-Use smaller dimensions for smoke if needed; the real Gate A can return to the
-recommended V5 defaults.
-
-## Bottom Line
-
-The data/loss/export contract is now good enough.
-
-The next problem is architecture:
+Acceptance:
 
 ```text
-global style bottleneck -> local spatial evidence path
+exported_pixels_mae < 0.01
+exported_pixels_hit_5_255 > 0.90
+skin.wsz exports cleanly
+rendered/exported skin looks sharp enough to compare against V4
 ```
 
-Implement V5 local-attention per-file heads.
+V5 must pass this. V35/V4 already passed one-skin overfit; if V5 fails
+BlueCurve, the V5 implementation or conditioning path needs correction before
+Gate B.
+
+## Gate A Monitoring
+
+Single-batch training rows are noisy. Monitor rolling trend, but make decisions
+from full-dataset eval.
+
+Useful checkpoint checks:
+
+```text
+5k   sanity: loss should be clearly moving down
+10k  likely enough to see whether V5 can overfit
+20k  official Gate A limit
+```
+
+If it passes strongly at 10k, stop early and report the 10k checkpoint.
+If it is close but still improving, continue to 20k.
+If it is clearly worse than V4 by 10k, pause and inspect attention/architecture
+before burning the full run.
+
+## Gate A Eval Commands
+
+Evaluate final/snapshot checkpoints with full-dataset masked metrics:
+
+```bash
+.venv/bin/python scripts/09_eval_slotnet_overfit.py \
+  --samples data_v35_bluecurve_overfit/train.csv \
+  --slotnet runs/slotnet_v5_bluecurve_gateA/snapshot_step010000.safetensors \
+  --device cuda \
+  > runs/slotnet_v5_bluecurve_gateA/eval_snapshot_step010000.json
+
+.venv/bin/python scripts/09_eval_slotnet_overfit.py \
+  --samples data_v35_bluecurve_overfit/train.csv \
+  --slotnet runs/slotnet_v5_bluecurve_gateA/snapshot_step020000.safetensors \
+  --device cuda \
+  > runs/slotnet_v5_bluecurve_gateA/eval_snapshot_step020000.json
+```
+
+If the run stops early, adjust the snapshot step accordingly.
+
+Export a `.wsz` from the selected checkpoint:
+
+```bash
+VIEW=$(tail -n +2 data_v35_bluecurve_overfit/train.csv | cut -d, -f3 | head -1)
+.venv/bin/python infer_skin.py \
+  --image "$VIEW" \
+  --slotnet runs/slotnet_v5_bluecurve_gateA/snapshot_step010000.safetensors \
+  --out runs/slotnet_v5_bluecurve_gateA/export_snapshot_step010000 \
+  --device cuda
+unzip -t runs/slotnet_v5_bluecurve_gateA/export_snapshot_step010000/skin.wsz
+```
+
+## Report Required After Gate A
+
+Report:
+
+```text
+checkpoint used
+exported_pixels_mae
+exported_pixels_hit_5_255
+exported_pixels_sobel_mae
+per-file MAE/hit5/sobel
+whether .wsz exports cleanly
+whether PLEDIT.bmp is present
+whether VIDEO.bmp is absent
+comparison against V4/V3.5 BlueCurve
+```
+
+Also include whether the V5 learning curve looks better/worse than V4 on the
+same BlueCurve data.
+
+## After Gate A
+
+Only if BlueCurve Gate A passes:
+
+1. Run one more one-skin check on `data_v35_darkside_overfit/train.csv`, or
+   proceed directly to Gate B if BlueCurve is very strong.
+2. Gate B: three-skin overfit.
+3. Gate C: repeat `data_v4_16skin/train.csv` against the V4 baseline.
+
+Do not start Gate B or Gate C until Gate A passes.
+
+## Do Not Change These
+
+Keep:
+
+- exact exported BMP tensors
+- static Cranamp-supported-pixel loss/eval
+- per-file output tensors
+- retrieval eval for multi-skin gates
+- no prior atlas
+- no distortion metadata
+- no dynamic masks as model input
+- no padded full-atlas pass/fail metric
+
+Do not return to V4 tuning unless Gate A reveals a concrete V5 implementation
+bug.
