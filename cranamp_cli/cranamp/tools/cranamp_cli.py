@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
+from atlas_ai.export_spec import TRAINABLE_EXPORT_FILES
 from atlas_ai.profiles import load_export_profile
 from atlas_ai.skins import load_default_assets, load_skin_assets, normalize_name
 
@@ -22,10 +23,39 @@ EXPORT_PROFILE = REPO_ROOT / "configs/export_profile_classic.json"
 DEFAULT_SKIN = REPO_ROOT / "assets/default_skin"
 
 
+# Final-frame provenance encoding. Each canvas pixel stores 0 when no clean
+# exported BMP source survives at that location, or an encoded source identity:
+#
+#   id = 1 + (file_id << 22) + (src_y << 11) + src_x
+#
+# file_id indexes TRAINABLE_EXPORT_FILES (0..10), src_x/src_y are coordinates
+# inside the original exported BMP (each <= 2047 to fit 11 bits).
+TRAINABLE_FILE_TO_ID: dict[str, int] = {name: idx for idx, name in enumerate(TRAINABLE_EXPORT_FILES)}
+
+
+def encode_provenance(file_id: int, src_y: int, src_x: int) -> int:
+    return 1 + (file_id << 22) + (src_y << 11) + src_x
+
+
+def decode_provenance(packed: int) -> tuple[int, int, int]:
+    """(file_id, src_y, src_x) for a non-zero packed value."""
+    id0 = packed - 1
+    return (id0 >> 22, (id0 >> 11) & 0x7FF, id0 & 0x7FF)
+
+
 def scale_pair(scale: float | tuple[float, float]) -> tuple[float, float]:
     if isinstance(scale, tuple):
         return scale
     return (scale, scale)
+
+
+def _nearest_resize_u32(arr: np.ndarray, new_w: int, new_h: int) -> np.ndarray:
+    """PIL-compatible nearest-neighbor resize for uint32 (mode 'I' via int32)."""
+    if arr.shape == (new_h, new_w):
+        return arr.copy()
+    src_img = Image.fromarray(arr.astype(np.int32), mode="I")
+    resized = src_img.resize((new_w, new_h), Image.Resampling.NEAREST)
+    return np.asarray(resized, dtype=np.uint32)
 
 
 class Renderer:
@@ -38,6 +68,10 @@ class Renderer:
         self.default_assets = load_default_assets(DEFAULT_SKIN)
         self.images: dict[str, Image.Image] = {}
         self.canvas = Image.new("RGBA", (canvas_w, canvas_h), (14, 14, 18, 255))
+        # Final-frame provenance: which clean exported BMP source pixel survives
+        # at each canvas pixel after all overdraw, fills, text, and window
+        # compositing. 0 means no source survives (procedural or background).
+        self.provenance: np.ndarray = np.zeros((canvas_h, canvas_w), dtype=np.uint32)
 
     def image_for(self, file_name: str) -> Image.Image:
         key = normalize_name(file_name)
@@ -88,19 +122,111 @@ class Renderer:
             rendered_crop = crop
         rdx, rdy = round(dx), round(dy)
         self.canvas.alpha_composite(rendered_crop, (rdx, rdy))
+        self._update_provenance_blit(
+            file_name=file_name,
+            src_x=sx,
+            src_y=sy,
+            src_w=sw,
+            src_h=sh,
+            rendered_crop=rendered_crop,
+            rdx=rdx,
+            rdy=rdy,
+        )
         if component_id is not None:
             self.mark_rect(component_id, (dx, dy, sw, sh), scale)
+
+    def _update_provenance_blit(
+        self,
+        *,
+        file_name: str,
+        src_x: int,
+        src_y: int,
+        src_w: int,
+        src_h: int,
+        rendered_crop: Image.Image,
+        rdx: int,
+        rdy: int,
+    ) -> None:
+        rendered_w, rendered_h = rendered_crop.size
+        # Canvas region covered by the rendered crop, clipped to canvas bounds.
+        canvas_x0 = max(0, rdx)
+        canvas_y0 = max(0, rdy)
+        canvas_x1 = min(self.canvas_w, rdx + rendered_w)
+        canvas_y1 = min(self.canvas_h, rdy + rendered_h)
+        if canvas_x1 <= canvas_x0 or canvas_y1 <= canvas_y0:
+            return
+        crop_x0 = canvas_x0 - rdx
+        crop_y0 = canvas_y0 - rdy
+        crop_x1 = canvas_x1 - rdx
+        crop_y1 = canvas_y1 - rdy
+
+        rendered_arr = np.asarray(rendered_crop, dtype=np.uint8)
+        alpha = rendered_arr[crop_y0:crop_y1, crop_x0:crop_x1, 3]
+        contributes = alpha > 0
+        if not contributes.any():
+            return
+
+        file_id = TRAINABLE_FILE_TO_ID.get(file_name)
+        if file_id is None:
+            # Non-trainable opaque overdraw clears earlier provenance at the
+            # contributing pixels but introduces no new source identity.
+            self.provenance[canvas_y0:canvas_y1, canvas_x0:canvas_x1][contributes] = 0
+            return
+
+        # Map each contributing canvas pixel back to its source BMP coordinate
+        # via the same nearest-neighbor rule PIL used to build rendered_crop.
+        dy_local = np.arange(crop_y0, crop_y1, dtype=np.int64) - 0  # 0..rendered_h-1 slice
+        dx_local = np.arange(crop_x0, crop_x1, dtype=np.int64)
+        # PIL nearest-resize maps dst (t) to src floor((t + 0.5) * S / T).
+        if rendered_h == src_h:
+            src_dy = dy_local
+        else:
+            src_dy = np.floor((dy_local + 0.5) * src_h / rendered_h).astype(np.int64)
+            src_dy = np.clip(src_dy, 0, src_h - 1)
+        if rendered_w == src_w:
+            src_dx = dx_local
+        else:
+            src_dx = np.floor((dx_local + 0.5) * src_w / rendered_w).astype(np.int64)
+            src_dx = np.clip(src_dx, 0, src_w - 1)
+
+        src_y_grid = (src_y + src_dy[:, None]).astype(np.uint32)
+        src_x_grid = (src_x + src_dx[None, :]).astype(np.uint32)
+        ids = np.uint32(1) + (np.uint32(file_id) << 22) + (src_y_grid << 11) + src_x_grid
+        target = self.provenance[canvas_y0:canvas_y1, canvas_x0:canvas_x1]
+        target[contributes] = ids[contributes]
 
     def composite_procedural(self, layer: Image.Image, dest: tuple[int, int]) -> None:
         """Alpha-composite procedurally-painted content onto the canvas."""
         dx, dy = int(dest[0]), int(dest[1])
         self.canvas.alpha_composite(layer, (dx, dy))
+        lw, lh = layer.size
+        canvas_x0 = max(0, dx)
+        canvas_y0 = max(0, dy)
+        canvas_x1 = min(self.canvas_w, dx + lw)
+        canvas_y1 = min(self.canvas_h, dy + lh)
+        if canvas_x1 <= canvas_x0 or canvas_y1 <= canvas_y0:
+            return
+        layer_arr = np.asarray(layer.convert("RGBA"), dtype=np.uint8)
+        alpha = layer_arr[
+            canvas_y0 - dy : canvas_y1 - dy,
+            canvas_x0 - dx : canvas_x1 - dx,
+            3,
+        ]
+        contributes = alpha > 0
+        if contributes.any():
+            self.provenance[canvas_y0:canvas_y1, canvas_x0:canvas_x1][contributes] = 0
 
     def fill_rect(self, rect: tuple[float, float, float, float], color: tuple[int, int, int, int]) -> None:
         x, y, w, h = rect
         x0, y0 = round(x), round(y)
         x1, y1 = round(x + w), round(y + h)
         ImageDraw.Draw(self.canvas).rectangle([x0, y0, x1, y1], fill=color)
+        cx0 = max(0, x0)
+        cy0 = max(0, y0)
+        cx1 = min(self.canvas_w, x1 + 1)
+        cy1 = min(self.canvas_h, y1 + 1)
+        if cx1 > cx0 and cy1 > cy0:
+            self.provenance[cy0:cy1, cx0:cx1] = 0
 
     def erase_rect_with_edge_average(
         self,
@@ -130,6 +256,8 @@ class Renderer:
             samples.append((14, 14, 18, 255))
         avg = tuple(int(round(sum(sample[channel] for sample in samples) / len(samples))) for channel in range(4))
         ImageDraw.Draw(self.canvas).rectangle([x0, y0, x1 - 1, y1 - 1], fill=avg)
+        if x1 > x0 and y1 > y0:
+            self.provenance[y0:y1, x0:x1] = 0
 
 
 _ARTIST_POOL = [
@@ -764,21 +892,50 @@ def _render_window_pass(
 ) -> None:
     """Render one window onto a transparent sub-canvas, then composite it."""
     sub_canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    sub_provenance = np.zeros((canvas_h, canvas_w), dtype=np.uint32)
     saved_canvas = renderer.canvas
+    saved_provenance = renderer.provenance
 
     sub_params = {**params, "windows": {**params["windows"], window_name: [0, 0]}}
     renderer.canvas = sub_canvas
+    renderer.provenance = sub_provenance
     render_fn(renderer, sub_params)
     renderer.canvas = saved_canvas
+    renderer.provenance = saved_provenance
 
     if abs(window_sy - 1.0) > 1e-6:
         stretched_h = max(1, int(round(canvas_h * window_sy)))
         stretched = sub_canvas.resize((canvas_w, stretched_h), Image.Resampling.NEAREST)
+        stretched_provenance = _nearest_resize_u32(sub_provenance, canvas_w, stretched_h)
     else:
         stretched = sub_canvas
+        stretched_provenance = sub_provenance
 
-    ox, oy = final_origin
-    renderer.canvas.alpha_composite(stretched, (int(ox), int(oy)))
+    ox, oy = int(final_origin[0]), int(final_origin[1])
+    renderer.canvas.alpha_composite(stretched, (ox, oy))
+
+    # Composite provenance: copy stretched provenance into the saved buffer
+    # only where the stretched window contributes (alpha > 0). Transparent
+    # window pixels must not clear unrelated previous provenance.
+    str_h = stretched.height
+    str_w = stretched.width
+    canvas_x0 = max(0, ox)
+    canvas_y0 = max(0, oy)
+    canvas_x1 = min(renderer.canvas_w, ox + str_w)
+    canvas_y1 = min(renderer.canvas_h, oy + str_h)
+    if canvas_x1 <= canvas_x0 or canvas_y1 <= canvas_y0:
+        return
+    sub_x0 = canvas_x0 - ox
+    sub_y0 = canvas_y0 - oy
+    sub_x1 = canvas_x1 - ox
+    sub_y1 = canvas_y1 - oy
+    stretched_alpha = np.asarray(stretched, dtype=np.uint8)[sub_y0:sub_y1, sub_x0:sub_x1, 3]
+    contributes = stretched_alpha > 0
+    if not contributes.any():
+        return
+    target = renderer.provenance[canvas_y0:canvas_y1, canvas_x0:canvas_x1]
+    source = stretched_provenance[sub_y0:sub_y1, sub_x0:sub_x1]
+    target[contributes] = source[contributes]
 
 
 def render_with_params(skin_source: Path, params: dict, canvas_w: int | None = None, canvas_h: int | None = None) -> Renderer:
