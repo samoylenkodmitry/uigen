@@ -173,25 +173,17 @@ class Renderer:
             self.provenance[canvas_y0:canvas_y1, canvas_x0:canvas_x1][contributes] = 0
             return
 
-        # Map each contributing canvas pixel back to its source BMP coordinate
-        # via the same nearest-neighbor rule PIL used to build rendered_crop.
-        dy_local = np.arange(crop_y0, crop_y1, dtype=np.int64) - 0  # 0..rendered_h-1 slice
-        dx_local = np.arange(crop_x0, crop_x1, dtype=np.int64)
-        # PIL nearest-resize maps dst (t) to src floor((t + 0.5) * S / T).
-        if rendered_h == src_h:
-            src_dy = dy_local
+        src_y_grid = (src_y + np.arange(src_h, dtype=np.uint32)[:, None])
+        src_x_grid = (src_x + np.arange(src_w, dtype=np.uint32)[None, :])
+        source_ids = np.uint32(1) + (np.uint32(file_id) << 22) + (src_y_grid << 11) + src_x_grid
+        # Resize the provenance id image through Pillow too. Reimplementing
+        # Pillow's nearest-neighbor tie behavior by formula is fragile for
+        # non-integer scales; the id image must follow the rendered RGB pixels.
+        if rendered_w != src_w or rendered_h != src_h:
+            ids = _nearest_resize_u32(source_ids, rendered_w, rendered_h)
         else:
-            src_dy = np.floor((dy_local + 0.5) * src_h / rendered_h).astype(np.int64)
-            src_dy = np.clip(src_dy, 0, src_h - 1)
-        if rendered_w == src_w:
-            src_dx = dx_local
-        else:
-            src_dx = np.floor((dx_local + 0.5) * src_w / rendered_w).astype(np.int64)
-            src_dx = np.clip(src_dx, 0, src_w - 1)
-
-        src_y_grid = (src_y + src_dy[:, None]).astype(np.uint32)
-        src_x_grid = (src_x + src_dx[None, :]).astype(np.uint32)
-        ids = np.uint32(1) + (np.uint32(file_id) << 22) + (src_y_grid << 11) + src_x_grid
+            ids = source_ids
+        ids = ids[crop_y0:crop_y1, crop_x0:crop_x1]
         target = self.provenance[canvas_y0:canvas_y1, canvas_x0:canvas_x1]
         target[contributes] = ids[contributes]
 

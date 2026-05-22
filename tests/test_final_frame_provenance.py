@@ -193,18 +193,28 @@ def test_scaled_blit_nearest_neighbor_mapping(cm):
 
 
 def test_scaled_blit_back_maps_match_rendered_pixels(cm):
-    """Every contributing canvas pixel must map back to a valid source pixel."""
+    """Every contributing canvas pixel must map back to the rendered source pixel."""
     r = _make_renderer(cm, 32, 32)
-    _inject(r, cm, "MAIN.bmp", _solid_rgba(3, 3))
-    r.blit("MAIN", "MAIN.bmp", (0, 0, 3, 3), (5, 5), 2.5)
-    # rendered size = round(3 * 2.5) = 8
+    rgba = np.zeros((3, 4, 4), dtype=np.uint8)
+    for sy in range(3):
+        for sx in range(4):
+            rgba[sy, sx] = (sx * 40 + 7, sy * 40 + 11, (sx + sy) * 20 + 13, 255)
+    _inject(r, cm, "MAIN.bmp", rgba)
+    r.blit("MAIN", "MAIN.bmp", (0, 0, 4, 3), (5, 5), (2.5, 1.7))
+    # rendered size = (round(4 * 2.5), round(3 * 1.7)) = (10, 5)
     file_id = cm.TRAINABLE_FILE_TO_ID["MAIN.bmp"]
-    region = r.provenance[5:13, 5:13]
+    rendered = np.asarray(r.canvas)[5:10, 5:15, :3]
+    region = r.provenance[5:10, 5:15]
     assert (region != 0).all()
-    decoded = np.array([cm.decode_provenance(int(v)) for v in region.flatten()])
-    assert (decoded[:, 0] == file_id).all()
-    assert decoded[:, 1].min() >= 0 and decoded[:, 1].max() <= 2
-    assert decoded[:, 2].min() >= 0 and decoded[:, 2].max() <= 2
+    for y in range(region.shape[0]):
+        for x in range(region.shape[1]):
+            fid, sy, sx = cm.decode_provenance(int(region[y, x]))
+            assert fid == file_id
+            assert tuple(rendered[y, x]) == (
+                sx * 40 + 7,
+                sy * 40 + 11,
+                (sx + sy) * 20 + 13,
+            )
 
 
 def test_blit_clipping_outside_canvas(cm):
@@ -274,12 +284,13 @@ def test_end_to_end_render_produces_provenance(cm):
     renderer = cm.render_with_params(ROOT / "assets/default_skin", params, 480, 864)
     nonzero = renderer.provenance[renderer.provenance != 0]
     assert nonzero.size > 0
-    file_ids = set(int(x >> 22) for x in nonzero.tolist())
+    file_ids = set(cm.decode_provenance(int(x))[0] for x in nonzero.tolist())
     expected = set(cm.TRAINABLE_FILE_TO_ID.values())
     assert file_ids == expected, f"missing file ids: {expected - file_ids}"
     # All decoded src coordinates must lie within the largest trainable BMP
     # bounds (well under the 2047 ceiling).
-    src_y = (nonzero >> 11) & 0x7FF
-    src_x = nonzero & 0x7FF
+    id0 = nonzero - 1
+    src_y = (id0 >> 11) & 0x7FF
+    src_x = id0 & 0x7FF
     assert int(src_y.max()) < 600
     assert int(src_x.max()) < 600
