@@ -6,9 +6,9 @@ Date: 2026-05-22
 
 Gate C had one clear outlier: `tvxq_winamp_skins_by_roseweedy_c379f7bd` with
 aggregate hit5 0.297 and 10 of 11 files below 0.85 hit5. Is this a data
-issue (bad render / bad target / wrong CSV row), an attention failure (model
-not localizing the right input region), or a capacity/detail failure (decoder
-too soft for the content)?
+issue (bad render / bad target / wrong CSV row), an attention/local-evidence
+failure (model not preserving the right input region), or a capacity/detail
+failure (decoder too soft for the content)?
 
 ## Method
 
@@ -64,19 +64,27 @@ flat regions.
 The render system and ground truth are working as intended; tvxq is
 genuinely a hard skin, not a corrupted one.
 
-### 2. Attention: not the issue.
+### 2. Attention: not a sufficient explanation by itself, but not proven clean.
 
-Attention overlays for `MAIN` on tvxq concentrate on the face/hair region
-of the input image — exactly where the photographic detail being
-reconstructed lives. The attention maps for `EQMAIN`, `PLEDIT`, `VOLUME`,
-`BALANCE` similarly hit relevant input regions (slider areas, button
-strips, body of the panel). The model is not lost.
+The attention overlays are useful debug artifacts, but they are weak evidence:
+V5 saves attention averaged across heads and across every output query in the
+file head. That average can show broad context while hiding whether a specific
+output region used the right source region.
+
+`MAIN` on tvxq does concentrate on the face/hair region of the input image,
+which is relevant for the photographic detail being reconstructed. Some other
+files are less clean. In particular, the `VOLUME` overlay is diffuse and partly
+lands on the portrait/background rather than cleanly on the volume slider
+strip. That means the earlier "attention lands on the right regions" claim was
+too strong.
 
 The minimalistic_black attention maps focus on slider edges and panel
 boundaries — design-defining structure rather than flat-fill regions —
 which makes sense for a flat-color skin.
 
-V5's cross-attention path is working. It is not the bottleneck on tvxq.
+The safer conclusion: V5 is not completely lost, but the current attention
+path does not prove reliable local source preservation. tvxq remains best
+explained by a combined local-evidence / decoder-detail bottleneck.
 
 ### 3. Decoder capacity / detail: **this is the issue.**
 
@@ -150,8 +158,10 @@ photographic).
 
 ```text
 data issue              NO   inputs/targets well-formed
-attention failure       NO   attention reaches relevant input regions
 identity / retrieval    NO   tvxq has unique global style; retrieval top1 = 1.000
+attention/local path    MIXED averaged maps show broad context, but VOLUME
+                             is not cleanly localized and attention is not a
+                             per-pixel source-preservation proof
 capacity / detail bound YES  decoders produce mean-color soft prediction;
                              fails per-pixel hit5 even when visually close
 ```
@@ -167,7 +177,8 @@ Discarded:
 
 ```text
 - "Investigate tvxq for data bug"           done; no bug
-- "Investigate tvxq for attention bug"      done; attention works
+- "Investigate tvxq for attention bug"      partially done; averaged maps are
+                                            not enough to clear the local path
 - "Per-skin curriculum / up-sample tvxq"    won't fix the soft-prediction
                                             mechanism; would burn cycles
 - "More training steps"                     30k -> 50k slope already shallow;
