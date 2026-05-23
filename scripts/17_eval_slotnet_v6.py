@@ -44,7 +44,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from atlas_ai.dataset_v6 import V6CopyDataset
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
-from models.losses_v6 import grid_sample_copy
+from models.losses_v6 import grid_sample_copy, refine_copy_rgb
 from models.slotnet_v6 import SlotNetV6
 
 
@@ -140,12 +140,15 @@ def evaluate(
                 head_out = files[spec.file_name]
                 uv_pred = head_out["uv"]
                 conf_logits = head_out["conf_logits"]
+                residual = head_out.get("residual")
                 target = batch["files"][spec.file_name]["target"].to(device)
                 visible = batch["files"][spec.file_name]["visible"].to(device)
                 uv_target = batch["files"][spec.file_name]["uv"].to(device)
 
-                # visible MAE via bilinear grid_sample (production copy path).
-                copy_rgb = grid_sample_copy(view, uv_pred).clamp(0.0, 1.0)
+                # visible MAE via the production copy_refined path: bilinear
+                # grid_sample (+ residual correction if the head has one).
+                copy_rgb = grid_sample_copy(view, uv_pred)
+                copy_rgb = refine_copy_rgb(copy_rgb, residual)
                 mask3 = visible.expand_as(copy_rgb)
                 diff = (copy_rgb - target).abs() * mask3
                 n_vis = float(mask3.sum().item())

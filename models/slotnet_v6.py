@@ -177,6 +177,12 @@ class CopyHead(nn.Module):
         self.body = nn.Sequential(*body_layers)
         self.uv_proj = nn.Conv2d(head_channels, 2, 1)
         self.conf_proj = nn.Conv2d(head_channels, 1, 1)
+        # Zero-initialized residual projection: at training start, copy_refined
+        # equals copy_rgb exactly. Lets us drop a residual head onto a frozen
+        # sampler-trained checkpoint without disturbing it.
+        self.residual_proj = nn.Conv2d(head_channels, 3, 1)
+        nn.init.zeros_(self.residual_proj.weight)
+        nn.init.zeros_(self.residual_proj.bias)
 
         self.register_buffer(
             "grid_coords",
@@ -199,7 +205,7 @@ class CopyHead(nn.Module):
         file_emb: torch.Tensor,
         *,
         return_attention: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
         queries = self.build_queries(style, file_emb)
         attn_summary: torch.Tensor | None = None
         for layer_idx, (attn, norm, ffn, ffn_norm) in enumerate(
@@ -225,7 +231,8 @@ class CopyHead(nn.Module):
             feat = F.interpolate(feat, size=(self.spec.h, self.spec.w), mode="nearest")
         uv = torch.tanh(self.uv_proj(feat))
         conf_logits = self.conf_proj(feat)
-        return uv, conf_logits, attn_summary
+        residual = self.residual_proj(feat)
+        return uv, conf_logits, residual, attn_summary
 
 
 class SlotNetV6(nn.Module):
@@ -355,13 +362,17 @@ class SlotNetV6(nn.Module):
         attention: dict[str, torch.Tensor] = {}
         h_enc, w_enc = f5.shape[-2:]
         for head in self.heads.values():
-            uv, conf_logits, attn_summary = head(
+            uv, conf_logits, residual, attn_summary = head(
                 style,
                 tokens,
                 all_file_emb[head.file_index],
                 return_attention=return_attention,
             )
-            outputs[head.spec.file_name] = {"uv": uv, "conf_logits": conf_logits}
+            outputs[head.spec.file_name] = {
+                "uv": uv,
+                "conf_logits": conf_logits,
+                "residual": residual,
+            }
             if return_attention and attn_summary is not None:
                 attention[head.spec.file_name] = attn_summary.reshape(-1, h_enc, w_enc)
         if return_attention:

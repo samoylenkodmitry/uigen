@@ -51,6 +51,8 @@ def compute_step_loss(
     *,
     uv_loss_mode: str = "normalized",
     uv_beta_px: float = 2.0,
+    residual_scale: float = 0.25,
+    use_residual: bool = False,
 ) -> dict[str, torch.Tensor]:
     """One training step: forward, compute per-file losses, sum across files."""
     view = batch["view"].to(device, non_blocking=True)
@@ -62,6 +64,7 @@ def compute_step_loss(
         "conf": torch.zeros((), device=device),
         "uv": torch.zeros((), device=device),
         "uv_tv": torch.zeros((), device=device),
+        "residual_l1": torch.zeros((), device=device),
         "total": torch.zeros((), device=device),
     }
     n_files = 0
@@ -71,6 +74,7 @@ def compute_step_loss(
         visible = labels["visible"].to(device, non_blocking=True)
         uv_target = labels["uv"].to(device, non_blocking=True)
         head_out = files[spec.file_name]
+        residual = head_out.get("residual") if use_residual else None
         loss_terms = compute_v6_copy_stage_loss(
             view=view,
             uv_pred=head_out["uv"],
@@ -81,9 +85,11 @@ def compute_step_loss(
             weights=weights,
             uv_loss_mode=uv_loss_mode,
             uv_beta_px=uv_beta_px,
+            residual=residual,
+            residual_scale=residual_scale,
         )
         totals["total"] = totals["total"] + loss_terms["total"]
-        for key in ("copy_rgb", "conf", "uv", "uv_tv"):
+        for key in ("copy_rgb", "conf", "uv", "uv_tv", "residual_l1"):
             totals[key] = totals[key] + loss_terms[key]
         n_files += 1
     if n_files:
@@ -113,6 +119,11 @@ def main() -> int:
     parser.add_argument("--weight-conf", type=float, default=0.25)
     parser.add_argument("--weight-uv", type=float, default=0.10)
     parser.add_argument("--weight-uv-tv", type=float, default=0.01)
+    parser.add_argument("--weight-residual-l1", type=float, default=0.0,
+                        help="L1 penalty on residual. >0 enables copy_refined path "
+                             "(copy_rgb + scale * tanh(residual)) in the loss.")
+    parser.add_argument("--residual-scale", type=float, default=0.25,
+                        help="Maximum residual magnitude per pixel (matches V6 plan).")
     parser.add_argument("--uv-loss", choices=["normalized", "pixel"], default="normalized",
                         help="UV smooth-L1 loss space. 'pixel' matches the eval metric "
                              "(use with --weight-uv >= 1.0 for UV-first training).")
@@ -164,8 +175,23 @@ def main() -> int:
         version = int(resume_state.get("slotnet_version", torch.tensor([0])).reshape(-1)[0].item())
         if version != 60:
             raise SystemExit(f"--resume-from expects V6 (60) checkpoint, got {version}")
-        model.load_state_dict(resume_state)
-        print(f"resumed weights from {args.resume_from}")
+        # strict=False so a pre-residual checkpoint can be dropped into a
+        # residual-equipped model: residual_proj keeps its zero init.
+        missing, unexpected = model.load_state_dict(resume_state, strict=False)
+        missing_set = set(missing)
+        residual_missing = {k for k in missing_set if "residual_proj" in k}
+        non_residual_missing = missing_set - residual_missing
+        if non_residual_missing:
+            raise SystemExit(
+                f"--resume-from is missing required keys: {sorted(non_residual_missing)[:5]}..."
+            )
+        if unexpected:
+            raise SystemExit(f"--resume-from has unexpected keys: {sorted(unexpected)[:5]}...")
+        if residual_missing:
+            print(f"resumed weights from {args.resume_from} "
+                  f"(residual head freshly zero-initialized)")
+        else:
+            print(f"resumed weights from {args.resume_from}")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -179,7 +205,9 @@ def main() -> int:
         conf=args.weight_conf,
         uv=args.weight_uv,
         uv_tv=args.weight_uv_tv,
+        residual_l1=args.weight_residual_l1,
     )
+    use_residual = args.weight_residual_l1 > 0.0
 
     config = {
         "model_version": 60,
@@ -213,6 +241,8 @@ def main() -> int:
                         model, batch, weights, device,
                         uv_loss_mode=args.uv_loss,
                         uv_beta_px=args.uv_beta_px,
+                        residual_scale=args.residual_scale,
+                        use_residual=use_residual,
                     )
                 if args.amp and device.type == "cuda":
                     scaler.scale(losses["total"]).backward()

@@ -180,9 +180,96 @@ def test_compute_v6_copy_stage_loss_pixel_mode_keys():
         uv_loss_mode="pixel",
         uv_beta_px=2.0,
     )
-    assert set(out) == {"total", "copy_rgb", "conf", "uv", "uv_tv"}
+    assert set(out) == {"total", "copy_rgb", "conf", "uv", "uv_tv", "residual_l1"}
     out["total"].backward()
     assert uv.grad is not None and uv.grad.abs().sum() > 0
+
+
+def test_refine_copy_rgb_zero_residual_is_clamp():
+    """refine_copy_rgb(copy, None) == clamp(copy, 0, 1)."""
+    from models.losses_v6 import refine_copy_rgb
+
+    copy = torch.tensor([[-0.5, 0.3, 0.7, 1.2]]).reshape(1, 1, 1, 4)
+    out = refine_copy_rgb(copy.expand(1, 3, 1, 4).contiguous(), None)
+    assert torch.allclose(out, copy.expand(1, 3, 1, 4).clamp(0, 1))
+
+
+def test_refine_copy_rgb_with_residual():
+    """At zero residual the refined output equals the clamped copy."""
+    from models.losses_v6 import refine_copy_rgb
+
+    copy = torch.full((1, 3, 4, 4), 0.5)
+    residual = torch.zeros(1, 3, 4, 4)
+    out = refine_copy_rgb(copy, residual, residual_scale=0.25)
+    assert torch.allclose(out, copy)
+
+
+def test_refine_copy_rgb_residual_bounds():
+    """tanh + clamp keeps refined output in [0, 1]."""
+    from models.losses_v6 import refine_copy_rgb
+
+    copy = torch.full((1, 3, 4, 4), 0.9)
+    residual = torch.full((1, 3, 4, 4), 100.0)  # tanh saturates to ~1
+    out = refine_copy_rgb(copy, residual, residual_scale=0.25)
+    assert out.max().item() <= 1.0
+    assert out.min().item() >= 0.0
+
+
+def test_residual_l1_penalty_only_counts_visible():
+    from models.losses_v6 import residual_l1_penalty
+
+    residual = torch.zeros(1, 3, 4, 4)
+    residual[..., 0, 0] = 0.5
+    visible = torch.zeros(1, 1, 4, 4)
+    assert float(residual_l1_penalty(residual, visible)) == 0.0
+    visible[..., 0, 0] = 1.0
+    out = residual_l1_penalty(residual, visible)
+    # 3 channels, value 0.5 each, mean over channels = 0.5.
+    assert pytest.approx(float(out), abs=1e-6) == 0.5
+
+
+def test_compute_v6_loss_with_residual_has_residual_l1_key():
+    from models.losses_v6 import V6CopyLossWeights, compute_v6_copy_stage_loss
+
+    view = torch.rand(1, 3, 32, 48)
+    uv = torch.zeros(1, 2, 8, 8, requires_grad=True)
+    conf = torch.zeros(1, 1, 8, 8, requires_grad=True)
+    residual = torch.zeros(1, 3, 8, 8, requires_grad=True)
+    target = torch.rand(1, 3, 8, 8)
+    visible = torch.zeros(1, 1, 8, 8)
+    visible[..., 2:6, 2:6] = 1.0
+    uv_target = torch.zeros(1, 2, 8, 8)
+    out = compute_v6_copy_stage_loss(
+        view=view, uv_pred=uv, conf_logits=conf, target_rgb=target,
+        visible_mask=visible, uv_target=uv_target,
+        weights=V6CopyLossWeights(residual_l1=0.05),
+        uv_loss_mode="pixel", uv_beta_px=2.0,
+        residual=residual, residual_scale=0.25,
+    )
+    assert set(out) == {"total", "copy_rgb", "conf", "uv", "uv_tv", "residual_l1"}
+    out["total"].backward()
+    assert residual.grad is not None and residual.grad.abs().sum() > 0
+
+
+def test_compute_v6_loss_residual_none_keeps_zero_residual_l1():
+    """When residual=None, residual_l1 metric is zero regardless of weight."""
+    from models.losses_v6 import V6CopyLossWeights, compute_v6_copy_stage_loss
+
+    view = torch.rand(1, 3, 32, 48)
+    uv = torch.zeros(1, 2, 8, 8)
+    conf = torch.zeros(1, 1, 8, 8)
+    target = torch.zeros(1, 3, 8, 8)
+    visible = torch.zeros(1, 1, 8, 8)
+    visible[..., 2:6, 2:6] = 1.0
+    uv_target = torch.zeros(1, 2, 8, 8)
+    out = compute_v6_copy_stage_loss(
+        view=view, uv_pred=uv, conf_logits=conf, target_rgb=target,
+        visible_mask=visible, uv_target=uv_target,
+        weights=V6CopyLossWeights(residual_l1=0.5),  # weight set but no residual
+        uv_loss_mode="pixel", uv_beta_px=2.0,
+        residual=None,
+    )
+    assert float(out["residual_l1"]) == 0.0
 
 
 def test_compute_v6_copy_stage_loss_rejects_unknown_mode():
@@ -241,7 +328,7 @@ def test_compute_v6_copy_stage_loss_keys_and_grad():
         uv_target=uv_target,
         weights=V6CopyLossWeights(),
     )
-    assert set(out) == {"total", "copy_rgb", "conf", "uv", "uv_tv"}
+    assert set(out) == {"total", "copy_rgb", "conf", "uv", "uv_tv", "residual_l1"}
     out["total"].backward()
     assert uv.grad is not None and uv.grad.abs().sum() > 0
     assert conf.grad is not None and conf.grad.abs().sum() > 0

@@ -174,11 +174,44 @@ def uv_total_variation_loss(uv_pred: torch.Tensor) -> torch.Tensor:
 
 @dataclass(frozen=True)
 class V6CopyLossWeights:
-    """Stage 2 loss weights from the V6 handoff."""
+    """Stage 2 / residual-probe loss weights.
+
+    `residual_l1` defaults to 0 so the original Stage 2 recipe is unchanged
+    when no residual head is being trained. Set to 0.02-0.05 to penalize
+    unnecessary residual activity in the copy_residual probe.
+    """
     copy_rgb: float = 1.00
     conf: float = 0.25
     uv: float = 0.10
     uv_tv: float = 0.01
+    residual_l1: float = 0.0
+
+
+def refine_copy_rgb(copy_rgb: torch.Tensor, residual: torch.Tensor | None,
+                    residual_scale: float = 0.25) -> torch.Tensor:
+    """Stage 2 copy path: clamp(copy_rgb + scale * tanh(residual), 0, 1).
+
+    When `residual` is None, returns clamp(copy_rgb, 0, 1) unchanged so the
+    refined path is equivalent to the original copy when no residual head is
+    attached.
+    """
+    refined = copy_rgb
+    if residual is not None:
+        refined = refined + residual_scale * torch.tanh(residual)
+    return refined.clamp(0.0, 1.0)
+
+
+def residual_l1_penalty(residual: torch.Tensor, visible_mask: torch.Tensor) -> torch.Tensor:
+    """L1 penalty on the residual at visible pixels.
+
+    Encourages the model to leave copy_rgb alone where the copy is already
+    correct. Computed only over visible pixels so masked-out regions don't
+    contribute spurious zero-target signal.
+    """
+    if visible_mask.dim() == 3:
+        visible_mask = visible_mask.unsqueeze(1)
+    mask3 = visible_mask.expand_as(residual).to(residual.dtype)
+    return masked_mean(residual.abs(), mask3)
 
 
 def compute_v6_copy_stage_loss(
@@ -192,6 +225,8 @@ def compute_v6_copy_stage_loss(
     weights: V6CopyLossWeights = V6CopyLossWeights(),
     uv_loss_mode: str = "normalized",
     uv_beta_px: float = 2.0,
+    residual: torch.Tensor | None = None,
+    residual_scale: float = 0.25,
 ) -> dict[str, torch.Tensor]:
     """Combine the Stage 2 V6 copy-head losses on one file.
 
@@ -202,12 +237,17 @@ def compute_v6_copy_stage_loss(
             the model needs to learn precise UV correspondence.
         uv_beta_px: pixel-space smooth-L1 transition; ignored if mode is
             'normalized'.
+        residual: optional [B, 3, H, W] correction added to the copied RGB as
+            `clamp(copy_rgb + residual_scale * tanh(residual), 0, 1)`. When
+            None, the original Stage 2 copy path is used.
+        residual_scale: maximum residual magnitude per pixel. Default 0.25
+            matches the V6 plan.
 
     Returns a dict containing each per-term scalar and a 'total' scalar suitable
     for backward(). Per-term scalars are detached for logging.
     """
     copy_rgb = grid_sample_copy(view, uv_pred)
-    copy_refined = copy_rgb.clamp(0.0, 1.0)
+    copy_refined = refine_copy_rgb(copy_rgb, residual, residual_scale)
     l_copy = copy_rgb_l1_loss(copy_refined, target_rgb, visible_mask)
     l_conf = conf_bce_loss(conf_logits, visible_mask)
     if uv_loss_mode == "pixel":
@@ -220,11 +260,16 @@ def compute_v6_copy_stage_loss(
     else:
         raise ValueError(f"unknown uv_loss_mode: {uv_loss_mode!r}")
     l_tv = uv_total_variation_loss(uv_pred)
+    if residual is not None:
+        l_residual = residual_l1_penalty(residual, visible_mask)
+    else:
+        l_residual = torch.zeros((), device=view.device, dtype=view.dtype)
     total = (
         weights.copy_rgb * l_copy
         + weights.conf * l_conf
         + weights.uv * l_uv
         + weights.uv_tv * l_tv
+        + weights.residual_l1 * l_residual
     )
     return {
         "total": total,
@@ -232,6 +277,7 @@ def compute_v6_copy_stage_loss(
         "conf": l_conf.detach(),
         "uv": l_uv.detach(),
         "uv_tv": l_tv.detach(),
+        "residual_l1": l_residual.detach(),
     }
 
 
@@ -242,6 +288,8 @@ __all__ = [
     "copy_rgb_l1_loss",
     "grid_sample_copy",
     "masked_mean",
+    "refine_copy_rgb",
+    "residual_l1_penalty",
     "uv_smooth_l1_loss",
     "uv_smooth_l1_pixel_loss",
     "uv_total_variation_loss",

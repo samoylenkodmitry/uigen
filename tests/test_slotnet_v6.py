@@ -25,7 +25,7 @@ def _tiny_model() -> SlotNetV6:
     )
 
 
-def test_forward_returns_uv_and_conf_per_file():
+def test_forward_returns_uv_conf_residual_per_file():
     model = _tiny_model().eval()
     view = torch.rand(1, 3, 64, 64)
     out = model(view)
@@ -35,6 +35,17 @@ def test_forward_returns_uv_and_conf_per_file():
         entry = files[spec.file_name]
         assert entry["uv"].shape == (1, 2, spec.h, spec.w)
         assert entry["conf_logits"].shape == (1, 1, spec.h, spec.w)
+        assert entry["residual"].shape == (1, 3, spec.h, spec.w)
+
+
+def test_residual_zero_initialized():
+    """Fresh model: residual_proj outputs exactly zero so copy_refined == copy_rgb."""
+    model = _tiny_model().eval()
+    view = torch.rand(1, 3, 64, 64)
+    out = model(view)
+    for spec in TRAINABLE_EXPORT_SPECS:
+        residual = out["files"][spec.file_name]["residual"]
+        assert torch.all(residual == 0), f"{spec.file_name} residual not zero at init"
 
 
 def test_uv_is_in_signed_unit_range():
@@ -76,7 +87,7 @@ def test_checkpoint_roundtrip(tmp_path):
     with torch.no_grad():
         out_b = fresh(view)
     for spec in TRAINABLE_EXPORT_SPECS:
-        for key in ("uv", "conf_logits"):
+        for key in ("uv", "conf_logits", "residual"):
             assert torch.allclose(out_a["files"][spec.file_name][key],
                                   out_b["files"][spec.file_name][key], atol=1e-6)
 
@@ -95,6 +106,8 @@ def test_grad_flows_to_encoder_and_every_head():
     for spec in TRAINABLE_EXPORT_SPECS:
         loss = loss + out["files"][spec.file_name]["uv"].abs().mean()
         loss = loss + out["files"][spec.file_name]["conf_logits"].abs().mean()
+        # Encourage residual to be non-zero through a learnable downstream path.
+        loss = loss + (out["files"][spec.file_name]["residual"] + 0.1).pow(2).mean()
     loss.backward()
     assert model.enc1[0].weight.grad is not None
     assert model.enc1[0].weight.grad.abs().sum() > 0
@@ -103,6 +116,8 @@ def test_grad_flows_to_encoder_and_every_head():
         head = model.heads[head_key]
         assert head.uv_proj.weight.grad is not None
         assert head.conf_proj.weight.grad is not None
+        assert head.residual_proj.weight.grad is not None
+        assert head.residual_proj.weight.grad.abs().sum() > 0
 
 
 def test_decoder_block_count_matches_divisor():

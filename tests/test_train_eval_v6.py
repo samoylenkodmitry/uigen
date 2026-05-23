@@ -77,7 +77,7 @@ def test_trainer_runs_a_few_steps_and_writes_checkpoint(tiny_dataset, tmp_path):
     assert len(lines) == 3
     parsed = [json.loads(line) for line in lines]
     for entry in parsed:
-        assert set(entry) == {"step", "total", "copy_rgb", "conf", "uv", "uv_tv"}
+        assert set(entry) == {"step", "total", "copy_rgb", "conf", "uv", "uv_tv", "residual_l1"}
 
 
 def test_trainer_resume_from_loads_weights(tiny_dataset, tmp_path):
@@ -117,6 +117,47 @@ def test_trainer_resume_from_loads_weights(tiny_dataset, tmp_path):
     a = (run_a / "last.safetensors").read_bytes()
     b = (run_b / "last.safetensors").read_bytes()
     assert a != b
+
+
+def test_trainer_resume_loads_pre_residual_checkpoint(tiny_dataset, tmp_path):
+    """A pre-residual V6 checkpoint (lacking residual_proj keys) must load via
+    --resume-from with the residual head left at its zero init."""
+    from safetensors.torch import load_file, save_file
+
+    run_a = tmp_path / "phase_a"
+    common = [
+        sys.executable, str(TRAINER),
+        "--train", str(tiny_dataset / "train.csv"),
+        "--skin-source", str(ROOT / "assets/default_skin"),
+        "--batch", "1",
+        "--base-channels", "8",
+        "--style-dim", "32",
+        "--head-channels", "16",
+        "--attn-dim", "32",
+        "--attention-heads", "4",
+        "--cross-attention-layers", "1",
+        "--file-embedding-dim", "8",
+        "--query-grid-divisor", "4",
+        "--num-workers", "0",
+        "--checkpoint-every", "1",
+        "--snapshot-every", "0",
+        "--device", "cpu",
+    ]
+    subprocess.run(common + ["--steps", "2", "--out", str(run_a)], check=True)
+    # Strip residual_proj keys to simulate an older checkpoint.
+    state = load_file(str(run_a / "last.safetensors"))
+    state = {k: v for k, v in state.items() if "residual_proj" not in k}
+    legacy = run_a / "last_legacy.safetensors"
+    save_file(state, str(legacy))
+
+    run_b = tmp_path / "phase_b"
+    subprocess.run(
+        common + ["--steps", "2", "--out", str(run_b),
+                  "--resume-from", str(legacy),
+                  "--weight-residual-l1", "0.02"],
+        check=True,
+    )
+    assert (run_b / "last.safetensors").exists()
 
 
 def test_trainer_resume_rejects_non_v6_checkpoint(tiny_dataset, tmp_path):
