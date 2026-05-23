@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from atlas_ai.dataset_v7_completion import V7CompletionDataset
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS, TRAINABLE_EXPORT_FILES
 from atlas_ai.state_families import group_by_family, load_state_families
+from atlas_ai.support_mask import load_support_masks
 from atlas_ai.v7_masks import V7MaskWeights
 
 
@@ -80,6 +81,16 @@ def test_mask_values_are_binary(dataset):
         assert set(unique.tolist()) <= {0.0, 1.0}
 
 
+def test_observed_mask_never_reveals_unsupported_pixels(dataset):
+    support_masks = load_support_masks()
+    for i in range(len(dataset)):
+        item = dataset[i]
+        file_name = item["file_name"]
+        mask = item["observed_mask"][0].bool()
+        support = support_masks[file_name]
+        assert not (mask & ~support).any(), file_name
+
+
 def test_modes_are_valid_strings(dataset):
     valid = {"provenance", "state_family", "random_rect", "whole_file"}
     for i in range(len(dataset)):
@@ -109,6 +120,18 @@ def test_state_family_mode_hides_volume_siblings():
     grouped = group_by_family(rects)
     frame_rects = grouped["slider_frames"]
     volume_index = TRAINABLE_EXPORT_FILES.index("VOLUME.bmp")
+    support = load_support_masks()["VOLUME.bmp"].numpy().astype(bool)
+
+    def _rect_observed(mask, rect) -> bool:
+        supported = support[rect.y : rect.y + rect.h, rect.x : rect.x + rect.w]
+        observed = mask[rect.y : rect.y + rect.h, rect.x : rect.x + rect.w]
+        return bool(supported.any() and observed[supported].all())
+
+    def _rect_hidden(mask, rect) -> bool:
+        supported = support[rect.y : rect.y + rect.h, rect.x : rect.x + rect.w]
+        observed = mask[rect.y : rect.y + rect.h, rect.x : rect.x + rect.w]
+        return bool(supported.any() and (observed[supported] == 0).all())
+
     revealed_seen: Counter[int] = Counter()
     for seed in range(50):
         ds = V7CompletionDataset(
@@ -122,11 +145,11 @@ def test_state_family_mode_hides_volume_siblings():
         mask = item["observed_mask"][0].numpy()
         revealed = [
             i for i, r in enumerate(frame_rects)
-            if mask[r.y : r.y + r.h, r.x : r.x + r.w].all()
+            if _rect_observed(mask, r)
         ]
         hidden = [
             i for i, r in enumerate(frame_rects)
-            if (mask[r.y : r.y + r.h, r.x : r.x + r.w] == 0).all()
+            if _rect_hidden(mask, r)
         ]
         # Either slider_frames family was picked (1 revealed, 27 hidden) or
         # the thumb family was picked (all 28 frames still observed).
@@ -148,6 +171,18 @@ def test_state_family_mode_hides_eqmain_siblings_across_rows():
     frames = grouped["slider_frames"]
     assert len(frames) == 28
     eqmain_index = TRAINABLE_EXPORT_FILES.index("EQMAIN.bmp")
+    support = load_support_masks()["EQMAIN.bmp"].numpy().astype(bool)
+
+    def _rect_observed(mask, rect) -> bool:
+        supported = support[rect.y : rect.y + rect.h, rect.x : rect.x + rect.w]
+        observed = mask[rect.y : rect.y + rect.h, rect.x : rect.x + rect.w]
+        return bool(supported.any() and observed[supported].all())
+
+    def _rect_hidden(mask, rect) -> bool:
+        supported = support[rect.y : rect.y + rect.h, rect.x : rect.x + rect.w]
+        observed = mask[rect.y : rect.y + rect.h, rect.x : rect.x + rect.w]
+        return bool(supported.any() and (observed[supported] == 0).all())
+
     seen_hidden_both_rows = False
     for seed in range(200):
         ds = V7CompletionDataset(
@@ -160,11 +195,11 @@ def test_state_family_mode_hides_eqmain_siblings_across_rows():
         mask = item["observed_mask"][0].numpy()
         revealed = [
             i for i, r in enumerate(frames)
-            if mask[r.y : r.y + r.h, r.x : r.x + r.w].all()
+            if _rect_observed(mask, r)
         ]
         hidden = [
             i for i, r in enumerate(frames)
-            if (mask[r.y : r.y + r.h, r.x : r.x + r.w] == 0).all()
+            if _rect_hidden(mask, r)
         ]
         if len(revealed) == 1 and len(hidden) == 27:
             rows = {0 if i < 14 else 1 for i in hidden}
@@ -248,6 +283,18 @@ def test_dataset_seed_changes_alter_masks():
         if not torch.equal(ds_a[i]["observed_mask"], ds_b[i]["observed_mask"]):
             differences += 1
     assert differences > 0
+
+
+def test_set_epoch_changes_masks():
+    ds = V7CompletionDataset(
+        skin_sources={"default": DEFAULT_SKIN},
+        state_families_path=CONFIG,
+        seed=17,
+    )
+    before = [ds[i]["observed_mask"].clone() for i in range(len(ds))]
+    ds.set_epoch(1)
+    after = [ds[i]["observed_mask"] for i in range(len(ds))]
+    assert any(not torch.equal(a, b) for a, b in zip(before, after))
 
 
 def test_dataloader_batch_size_one(dataset):

@@ -10,8 +10,12 @@ partial-evidence inputs:
 
 Masks are drawn fresh on every __getitem__ via
 `atlas_ai.v7_masks.sample_v7_observed_mask`, seeded deterministically by
-`(self.seed, index)` so the same index reproduces the same item. To get
-fresh masks per epoch, vary the dataset's `seed` between epochs.
+`(self.seed, self.epoch, index)` so the same index reproduces the same item
+within an epoch. Call `set_epoch()` between epochs to draw fresh masks.
+
+Observed masks are intersected with the static Cranamp support mask. The
+completion branch must not receive unsupported BMP pixels as evidence because
+the deployed observer/copy path can never see them.
 
 The dataset is multi-skin: construct it with a dict[skin_id, skin_source]
 where each skin_source is a directory containing the 11 trainable BMPs.
@@ -36,6 +40,7 @@ from torch.utils.data import Dataset
 
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
 from atlas_ai.state_families import StateRect, load_state_families
+from atlas_ai.support_mask import load_support_masks
 from atlas_ai.v7_masks import V7MaskWeights, sample_v7_observed_mask
 
 
@@ -109,7 +114,12 @@ class V7CompletionDataset(Dataset):
         self.provenance_pools = self._validate_provenance(provenance_pools or {})
         self.mask_weights = mask_weights
         self.seed = int(seed)
+        self.epoch = 0
         self.spec_by_file = {spec.file_name: spec for spec in TRAINABLE_EXPORT_SPECS}
+        self.support_masks: dict[str, np.ndarray] = {
+            file_name: mask.cpu().numpy().astype(np.uint8)
+            for file_name, mask in load_support_masks().items()
+        }
         # Item order is (skin, file) in TRAINABLE_EXPORT_SPECS sequence so the
         # dataset is reproducible and indices are stable.
         self.items: list[tuple[str, str]] = [
@@ -145,13 +155,17 @@ class V7CompletionDataset(Dataset):
     def __len__(self) -> int:
         return len(self.items)
 
+    def set_epoch(self, epoch: int) -> None:
+        """Select the deterministic mask stream for the next epoch."""
+        self.epoch = int(epoch)
+
     def __getitem__(self, index: int) -> dict:
         skin_id, file_name = self.items[index]
         spec = self.spec_by_file[file_name]
         target_rgb = self.targets[skin_id][file_name]
         rects = self.state_families.get(file_name, [])
         pool = self.provenance_pools.get(file_name)
-        rng = np.random.default_rng((self.seed, index))
+        rng = np.random.default_rng((self.seed, self.epoch, index))
         mask_np, mode = sample_v7_observed_mask(
             rng,
             h=spec.h,
@@ -159,6 +173,9 @@ class V7CompletionDataset(Dataset):
             family_rects=rects,
             visible_masks=pool,
             weights=self.mask_weights,
+        )
+        mask_np = (
+            mask_np.astype(np.uint8, copy=False) & self.support_masks[file_name]
         )
         mask = torch.from_numpy(
             np.ascontiguousarray(mask_np.astype(np.float32))
