@@ -18,7 +18,8 @@ COLAB_RUNTIME  := configs/runtime/colab.yaml
 .PHONY: help local kaggle colab \
         bench-local bench-kaggle bench-colab \
         local-env kaggle-env colab-env \
-        local-dry kaggle-dry colab-dry
+        local-dry kaggle-dry colab-dry \
+        package-kaggle-data
 
 help:
 	@echo "V7 portable run targets"
@@ -71,3 +72,17 @@ kaggle-env:
 
 colab-env:
 	$(PYTHON) scripts/print_env.py
+
+# Package data_v7_16skin_completion for Kaggle dataset upload.
+# Produces dist/uigen-data-v7-16skin.tar.gz + SHA256 sidecar.
+KAGGLE_DATASET_SRC := data_v7_16skin_completion
+KAGGLE_DATASET_ARCHIVE := dist/uigen-data-v7-16skin.tar.gz
+package-kaggle-data:
+	@test -d $(KAGGLE_DATASET_SRC) || \
+		(echo "missing $(KAGGLE_DATASET_SRC) -- run scripts/21_unpack_atlases_to_skin_dirs.py first" && exit 1)
+	@mkdir -p dist
+	tar -czf $(KAGGLE_DATASET_ARCHIVE) \
+		--exclude='*.pyc' --exclude='__pycache__' \
+		$(KAGGLE_DATASET_SRC)
+	sha256sum $(KAGGLE_DATASET_ARCHIVE) > $(KAGGLE_DATASET_ARCHIVE).sha256
+	@echo "wrote $(KAGGLE_DATASET_ARCHIVE) ($$(du -h $(KAGGLE_DATASET_ARCHIVE) | cut -f1))"

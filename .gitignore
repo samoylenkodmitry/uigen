@@ -14,7 +14,10 @@ data_v35/
 data_v35_*/
 data_v4/
 data_v4_*/
+data_v6_*/
+data_v7_*/
 debug/
+dist/
 runs/
 eval/
 out_skin/
