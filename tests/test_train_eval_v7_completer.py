@@ -51,16 +51,26 @@ def test_trainer_smoke_runs_and_writes_artifacts(tmp_path):
 
 
 def test_trainer_loss_drops_over_few_steps(tmp_path):
-    """Sanity that the model actually trains: total loss decreases over a
-    handful of steps. Skip rows where the hard-mask copy made loss exactly
-    zero (e.g. state_family fallback on MAIN.bmp -> mask=ones)."""
+    """Sanity that the model actually trains.
+
+    Keep the sampled file and mask family fixed; otherwise this smoke test
+    measures sampler/mask difficulty variance rather than optimization.
+    """
     run = tmp_path / "v7_run"
-    subprocess.run(_trainer_args(run, "--steps", "20"), check=True)
+    subprocess.run(_trainer_args(
+        run,
+        "--steps", "30",
+        "--batch", "1",
+        "--only-file", "PLAYPAUS.bmp",
+        "--mask-provenance", "0",
+        "--mask-state-family", "0",
+        "--mask-random-rect", "0",
+        "--mask-whole-file", "1",
+        "--lr", "0.01",
+    ), check=True)
     metrics = [json.loads(l) for l in (run / "metrics.jsonl").read_text().splitlines()]
-    nonzero = [m for m in metrics if m["total"] > 0.0]
-    assert len(nonzero) >= 5, "too few non-trivial training steps"
-    first_avg = sum(m["total"] for m in nonzero[: max(1, len(nonzero) // 4)]) / max(1, len(nonzero) // 4)
-    last_avg = sum(m["total"] for m in nonzero[-max(1, len(nonzero) // 4):]) / max(1, len(nonzero) // 4)
+    first_avg = sum(m["total"] for m in metrics[:5]) / 5.0
+    last_avg = sum(m["total"] for m in metrics[-5:]) / 5.0
     assert last_avg < first_avg, f"loss did not drop: first_avg={first_avg} last_avg={last_avg}"
 
 

@@ -101,10 +101,30 @@ def test_run_experiment_dry_run_prints_command():
     assert "--steps 10" in cmd
     # skin-sources flag is present.
     assert "--skin-sources" in cmd
+    assert f"default={ROOT / 'assets/default_skin'}" in cmd
+    assert str(ROOT / "configs/state_families_classic.yaml") in cmd
+    assert str(ROOT / "configs/v7_file_weights_continuation.yaml") in cmd
     # No actual run dir should be created during dry-run.
     out_dir = ROOT / "runs" / "v7_completer_gateB_16skin"
     # We may or may not have one from prior runs; just assert the dry-run
     # didn't crash and the command looks valid.
+
+
+def test_run_experiment_dry_run_is_not_cwd_dependent(tmp_path):
+    """Repo-relative path args should resolve through runtime repo_dir, not cwd."""
+    result = subprocess.run(
+        [sys.executable, str(RUN_EXPERIMENT),
+         "--runtime", str(LOCAL_RUNTIME),
+         "--experiment", str(EXPERIMENT),
+         "--override", "args.steps=1",
+         "--override", "args.skin-sources=default=assets/default_skin",
+         "--dry-run"],
+        cwd=tmp_path,
+        capture_output=True, text=True, check=True,
+    )
+    cmd = result.stdout.strip()
+    assert str(ROOT / "configs/state_families_classic.yaml") in cmd
+    assert f"default={ROOT / 'assets/default_skin'}" in cmd
 
 
 def test_run_experiment_uses_env_var(tmp_path, monkeypatch):

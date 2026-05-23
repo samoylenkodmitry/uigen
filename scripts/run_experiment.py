@@ -6,7 +6,7 @@ Glues a runtime config (`configs/runtime/<env>.yaml`) and an experiment YAML
 trainer. Writes a manifest into the run directory recording everything
 that fed the run.
 
-Path resolution rules for strings inside an experiment YAML:
+Path resolution rules for path-valued strings inside an experiment YAML:
     @data/... -> runtime.paths.data_dir / ...
     @runs/... -> runtime.paths.runs_dir / ...
     @cache/.. -> runtime.paths.cache_dir / ...
@@ -56,6 +56,12 @@ PATH_PREFIXES = {
     "@repo/": "repo_dir",
 }
 
+PATH_ARGS = {
+    "state-families",
+    "file-sampling-weights",
+    "resume-from",
+}
+
 
 def _resolve_path_token(token: str, runtime: RuntimeConfig) -> Path:
     """Resolve a path token using @data/ / @runs/ / @cache/ / @repo/ prefixes
@@ -63,11 +69,21 @@ def _resolve_path_token(token: str, runtime: RuntimeConfig) -> Path:
     for prefix, root in PATH_PREFIXES.items():
         if token.startswith(prefix):
             rel = token[len(prefix):]
-            return runtime.resolve(rel, root=root)
+            return runtime.resolve(rel, root=root).resolve(strict=False)
     p = Path(token)
     if p.is_absolute():
-        return p
-    return runtime.resolve(token, root="repo_dir")
+        return p.resolve(strict=False)
+    return runtime.resolve(token, root="repo_dir").resolve(strict=False)
+
+
+def _resolve_pathish(value: str, runtime: RuntimeConfig) -> Path:
+    """Resolve @-prefixed, absolute, or repo-relative path strings."""
+    if _looks_like_path(value):
+        return _resolve_path_token(value, runtime)
+    p = Path(value)
+    if p.is_absolute():
+        return p.resolve(strict=False)
+    return runtime.resolve(value, root="repo_dir").resolve(strict=False)
 
 
 def _looks_like_path(value: Any) -> bool:
@@ -119,7 +135,7 @@ def _format_skin_sources(value: Any, runtime: RuntimeConfig) -> str:
     if isinstance(value, dict):
         items = []
         for sid, p in value.items():
-            absolute = _resolve_path_token(str(p), runtime) if _looks_like_path(str(p)) else Path(p)
+            absolute = _resolve_pathish(str(p), runtime)
             items.append(f"{sid}={absolute}")
         return ",".join(items)
     if isinstance(value, list):
@@ -128,14 +144,19 @@ def _format_skin_sources(value: Any, runtime: RuntimeConfig) -> str:
             entry_str = str(entry)
             if "=" in entry_str:
                 sid, p = entry_str.split("=", 1)
-                absolute = _resolve_path_token(p, runtime) if _looks_like_path(p) else Path(p)
+                absolute = _resolve_pathish(p, runtime)
                 items.append(f"{sid}={absolute}")
             else:
-                abs_p = _resolve_path_token(entry_str, runtime) if _looks_like_path(entry_str) else Path(entry_str)
+                abs_p = _resolve_pathish(entry_str, runtime)
                 items.append(f"{abs_p.name}={abs_p}")
         return ",".join(items)
     text = str(value)
-    p = _resolve_path_token(text, runtime) if _looks_like_path(text) else Path(text)
+    if "," in text or "=" in text:
+        return _format_skin_sources(
+            [part.strip() for part in text.split(",") if part.strip()],
+            runtime,
+        )
+    p = _resolve_pathish(text, runtime)
     if p.is_dir():
         children = sorted(c for c in p.iterdir() if c.is_dir())
         if not children:
@@ -170,7 +191,11 @@ def build_command(
     args_mapping = dict(args_mapping)
 
     # Synthesize derived args.
-    if "skin-sources" not in args_mapping and experiment.get("data"):
+    if "skin-sources" in args_mapping:
+        args_mapping["skin-sources"] = _format_skin_sources(
+            args_mapping["skin-sources"], runtime
+        )
+    elif experiment.get("data"):
         data = experiment["data"]
         if "skin_sources" in data:
             args_mapping["skin-sources"] = _format_skin_sources(data["skin_sources"], runtime)
@@ -179,6 +204,11 @@ def build_command(
     out_value = experiment.get("out")
     if out_value:
         args_mapping["out"] = _resolve_value(out_value, runtime)
+
+    for key, value in list(args_mapping.items()):
+        normalized_key = str(key).replace("_", "-")
+        if normalized_key in PATH_ARGS and value:
+            args_mapping[key] = str(_resolve_pathish(str(value), runtime))
 
     # Runtime defaults if the experiment doesn't override.
     args_mapping.setdefault("device", runtime.device)
