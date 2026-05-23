@@ -11,7 +11,9 @@ name: kaggle
 
 paths:
   repo_dir: /kaggle/working/uigen
-  data_dir: /kaggle/input/uigen-data
+  # Kaggle auto-extracts the uploaded tarball into a directory named after
+  # the archive (without .tar.gz). data_v7_16skin_completion/ sits inside.
+  data_dir: /kaggle/input/uigen-data/uigen-data-v7-16skin
   runs_dir: /kaggle/working/runs
   cache_dir: /kaggle/working/cache
 
