@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import torch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,6 +118,59 @@ def test_trainer_resume_from_loads_weights(tiny_dataset, tmp_path):
     a = (run_a / "last.safetensors").read_bytes()
     b = (run_b / "last.safetensors").read_bytes()
     assert a != b
+
+
+def test_trainer_freeze_except_residual_only_updates_residual(tiny_dataset, tmp_path):
+    """With --freeze-except-residual, non-residual weights must not change."""
+    from safetensors.torch import load_file
+
+    run_a = tmp_path / "phase_a"
+    common = [
+        sys.executable, str(TRAINER),
+        "--train", str(tiny_dataset / "train.csv"),
+        "--skin-source", str(ROOT / "assets/default_skin"),
+        "--batch", "1",
+        "--base-channels", "8",
+        "--style-dim", "32",
+        "--head-channels", "16",
+        "--attn-dim", "32",
+        "--attention-heads", "4",
+        "--cross-attention-layers", "1",
+        "--file-embedding-dim", "8",
+        "--query-grid-divisor", "4",
+        "--num-workers", "0",
+        "--checkpoint-every", "1",
+        "--snapshot-every", "0",
+        "--device", "cpu",
+    ]
+    subprocess.run(common + ["--steps", "1", "--out", str(run_a),
+                             "--weight-residual-l1", "0.02"], check=True)
+    seed_state = load_file(str(run_a / "last.safetensors"))
+
+    run_b = tmp_path / "phase_b"
+    subprocess.run(
+        common + ["--steps", "3", "--out", str(run_b),
+                  "--resume-from", str(run_a / "last.safetensors"),
+                  "--freeze-except-residual",
+                  "--weight-copy-rgb", "1.0",
+                  "--weight-conf", "0.0",
+                  "--weight-uv", "0.0",
+                  "--weight-uv-tv", "0.0",
+                  "--weight-residual-l1", "0.001"],
+        check=True,
+    )
+    final_state = load_file(str(run_b / "last.safetensors"))
+
+    # Every non-residual weight stays bit-identical; at least one residual
+    # tensor has changed (gradient flowed through copy_refined).
+    residual_changed = False
+    for key in seed_state:
+        if "residual_proj" in key:
+            if not torch.equal(seed_state[key], final_state[key]):
+                residual_changed = True
+        elif "_buffer" not in key and "slotnet_version" not in key:
+            assert torch.equal(seed_state[key], final_state[key]), key
+    assert residual_changed, "residual_proj weights did not move"
 
 
 def test_trainer_resume_loads_pre_residual_checkpoint(tiny_dataset, tmp_path):

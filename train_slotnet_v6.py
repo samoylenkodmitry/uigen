@@ -132,6 +132,9 @@ def main() -> int:
     parser.add_argument("--resume-from", default=None,
                         help="Path to a .safetensors checkpoint whose weights seed the model. "
                              "Steps restart at 0; the new --out is independent of the source run.")
+    parser.add_argument("--freeze-except-residual", action="store_true",
+                        help="Freeze every parameter except per-file residual_proj. Used to "
+                             "isolate the residual head's contribution from backbone drift.")
     parser.add_argument("--checkpoint-every", type=int, default=1000)
     parser.add_argument("--snapshot-every", type=int, default=1000)
     parser.add_argument("--num-workers", type=int, default=2)
@@ -193,8 +196,16 @@ def main() -> int:
         else:
             print(f"resumed weights from {args.resume_from}")
 
+    if args.freeze_except_residual:
+        for name, param in model.named_parameters():
+            param.requires_grad_("residual_proj" in name)
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in model.parameters())
+        print(f"freeze-except-residual: {trainable:,} / {total:,} params trainable")
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        trainable_params,
         lr=args.lr,
         weight_decay=args.weight_decay,
         betas=(0.9, 0.95),
