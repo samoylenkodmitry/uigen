@@ -118,11 +118,14 @@ def main() -> int:
                     + int(labels[key].sum())
                 )
             labels.close()
+            # Store absolute paths. V6CopyDataset also accepts paths relative
+            # to the CSV directory, but writing absolute keeps the CSV usable
+            # from any cwd (including from a different repo working tree).
             writer.writerow([
                 args.skin_id,
                 f"{variant_id:04d}",
-                str(view_path),
-                str(labels_path),
+                str(view_path.resolve()),
+                str(labels_path.resolve()),
             ])
 
     print(f"wrote {args.variants} sample(s) to {out}")

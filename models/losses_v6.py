@@ -128,6 +128,39 @@ def uv_smooth_l1_loss(
     return masked_mean(per_pixel, mask2)
 
 
+def uv_smooth_l1_pixel_loss(
+    uv_pred: torch.Tensor,
+    uv_target: torch.Tensor,
+    visible_mask: torch.Tensor,
+    view_h: int,
+    view_w: int,
+    beta_px: float = 2.0,
+) -> torch.Tensor:
+    """Smooth-L1 between predicted and target UV expressed in input view pixels.
+
+    UV is in [-1, 1] under align_corners=False, so 1 unit = (size / 2) pixels.
+    Operating in pixel space makes the loss landscape match the Stage 2 eval
+    metric (uv_median_px), so the quadratic-to-linear knee sits at the
+    acceptance bar instead of far outside it.
+
+    Args:
+        uv_pred: [B, 2, H, W] in [-1, 1].
+        uv_target: [B, 2, H, W] in [-1, 1].
+        visible_mask: [B, 1, H, W] or [B, H, W] in {0, 1}.
+        view_h, view_w: input view dimensions used by grid_sample.
+        beta_px: smooth-L1 transition in pixels. Default 2.0 (the Stage 2 bar).
+    """
+    if visible_mask.dim() == 3:
+        visible_mask = visible_mask.unsqueeze(1)
+    du = (uv_pred[:, 0:1] - uv_target[:, 0:1]) * (view_w / 2.0)
+    dv = (uv_pred[:, 1:2] - uv_target[:, 1:2]) * (view_h / 2.0)
+    pixel_diff = torch.cat([du, dv], dim=1)
+    zeros = torch.zeros_like(pixel_diff)
+    per_pixel = F.smooth_l1_loss(pixel_diff, zeros, beta=beta_px, reduction="none")
+    mask2 = visible_mask.expand_as(pixel_diff).to(pixel_diff.dtype)
+    return masked_mean(per_pixel, mask2)
+
+
 def uv_total_variation_loss(uv_pred: torch.Tensor) -> torch.Tensor:
     """Per-pixel UV total variation regularization (encourages smooth UV).
 
@@ -157,8 +190,18 @@ def compute_v6_copy_stage_loss(
     visible_mask: torch.Tensor,
     uv_target: torch.Tensor,
     weights: V6CopyLossWeights = V6CopyLossWeights(),
+    uv_loss_mode: str = "normalized",
+    uv_beta_px: float = 2.0,
 ) -> dict[str, torch.Tensor]:
     """Combine the Stage 2 V6 copy-head losses on one file.
+
+    Args:
+        uv_loss_mode: 'normalized' (smooth-L1 in [-1, 1] space, beta=0.1) or
+            'pixel' (smooth-L1 in input-view pixel space, beta=uv_beta_px).
+            Pixel mode matches the Stage 2 eval metric and is recommended when
+            the model needs to learn precise UV correspondence.
+        uv_beta_px: pixel-space smooth-L1 transition; ignored if mode is
+            'normalized'.
 
     Returns a dict containing each per-term scalar and a 'total' scalar suitable
     for backward(). Per-term scalars are detached for logging.
@@ -167,7 +210,15 @@ def compute_v6_copy_stage_loss(
     copy_refined = copy_rgb.clamp(0.0, 1.0)
     l_copy = copy_rgb_l1_loss(copy_refined, target_rgb, visible_mask)
     l_conf = conf_bce_loss(conf_logits, visible_mask)
-    l_uv = uv_smooth_l1_loss(uv_pred, uv_target, visible_mask)
+    if uv_loss_mode == "pixel":
+        _, _, view_h, view_w = view.shape
+        l_uv = uv_smooth_l1_pixel_loss(
+            uv_pred, uv_target, visible_mask, view_h, view_w, beta_px=uv_beta_px,
+        )
+    elif uv_loss_mode == "normalized":
+        l_uv = uv_smooth_l1_loss(uv_pred, uv_target, visible_mask)
+    else:
+        raise ValueError(f"unknown uv_loss_mode: {uv_loss_mode!r}")
     l_tv = uv_total_variation_loss(uv_pred)
     total = (
         weights.copy_rgb * l_copy
@@ -192,6 +243,7 @@ __all__ = [
     "grid_sample_copy",
     "masked_mean",
     "uv_smooth_l1_loss",
+    "uv_smooth_l1_pixel_loss",
     "uv_total_variation_loss",
     "DEFAULT_CONF_POS_WEIGHT_CAP",
 ]

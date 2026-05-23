@@ -48,6 +48,9 @@ def compute_step_loss(
     batch: dict,
     weights: V6CopyLossWeights,
     device: torch.device,
+    *,
+    uv_loss_mode: str = "normalized",
+    uv_beta_px: float = 2.0,
 ) -> dict[str, torch.Tensor]:
     """One training step: forward, compute per-file losses, sum across files."""
     view = batch["view"].to(device, non_blocking=True)
@@ -76,6 +79,8 @@ def compute_step_loss(
             visible_mask=visible,
             uv_target=uv_target,
             weights=weights,
+            uv_loss_mode=uv_loss_mode,
+            uv_beta_px=uv_beta_px,
         )
         totals["total"] = totals["total"] + loss_terms["total"]
         for key in ("copy_rgb", "conf", "uv", "uv_tv"):
@@ -108,6 +113,14 @@ def main() -> int:
     parser.add_argument("--weight-conf", type=float, default=0.25)
     parser.add_argument("--weight-uv", type=float, default=0.10)
     parser.add_argument("--weight-uv-tv", type=float, default=0.01)
+    parser.add_argument("--uv-loss", choices=["normalized", "pixel"], default="normalized",
+                        help="UV smooth-L1 loss space. 'pixel' matches the eval metric "
+                             "(use with --weight-uv >= 1.0 for UV-first training).")
+    parser.add_argument("--uv-beta-px", type=float, default=2.0,
+                        help="Pixel-space smooth-L1 transition. Default 2.0 = Stage 2 bar.")
+    parser.add_argument("--resume-from", default=None,
+                        help="Path to a .safetensors checkpoint whose weights seed the model. "
+                             "Steps restart at 0; the new --out is independent of the source run.")
     parser.add_argument("--checkpoint-every", type=int, default=1000)
     parser.add_argument("--snapshot-every", type=int, default=1000)
     parser.add_argument("--num-workers", type=int, default=2)
@@ -145,6 +158,14 @@ def main() -> int:
         file_embedding_dim=args.file_embedding_dim,
         query_grid_divisor=args.query_grid_divisor,
     ).to(device)
+
+    if args.resume_from:
+        resume_state = load_state_dict(Path(args.resume_from))
+        version = int(resume_state.get("slotnet_version", torch.tensor([0])).reshape(-1)[0].item())
+        if version != 60:
+            raise SystemExit(f"--resume-from expects V6 (60) checkpoint, got {version}")
+        model.load_state_dict(resume_state)
+        print(f"resumed weights from {args.resume_from}")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -188,7 +209,11 @@ def main() -> int:
                     "cuda",
                     enabled=args.amp and device.type == "cuda",
                 ):
-                    losses = compute_step_loss(model, batch, weights, device)
+                    losses = compute_step_loss(
+                        model, batch, weights, device,
+                        uv_loss_mode=args.uv_loss,
+                        uv_beta_px=args.uv_beta_px,
+                    )
                 if args.amp and device.type == "cuda":
                     scaler.scale(losses["total"]).backward()
                     scaler.step(optimizer)

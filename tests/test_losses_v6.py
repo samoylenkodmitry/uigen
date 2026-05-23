@@ -131,6 +131,82 @@ def test_uv_smooth_l1_only_counts_visible():
     assert pytest.approx(float(out), abs=1e-6) == (0.45 + 0.0) / 2
 
 
+def test_uv_smooth_l1_pixel_loss_zero_when_match():
+    from models.losses_v6 import uv_smooth_l1_pixel_loss
+
+    pred = torch.zeros(1, 2, 4, 4)
+    target = torch.zeros(1, 2, 4, 4)
+    visible = torch.ones(1, 1, 4, 4)
+    out = uv_smooth_l1_pixel_loss(pred, target, visible, view_h=1728, view_w=960, beta_px=2.0)
+    assert float(out) == 0.0
+
+
+def test_uv_smooth_l1_pixel_loss_matches_pixel_math():
+    """1 normalized unit = (view_w / 2, view_h / 2) pixels. Verify the
+    smooth-L1 evaluation happens in pixel space against beta_px."""
+    from models.losses_v6 import uv_smooth_l1_pixel_loss
+
+    view_w, view_h = 100, 200
+    pred = torch.zeros(1, 2, 2, 2)
+    target = torch.zeros(1, 2, 2, 2)
+    # u error 0.1 at (0,0) -> 0.1 * 100/2 = 5 px. v error 0 there.
+    target[:, 0, 0, 0] = 0.1
+    visible = torch.zeros(1, 1, 2, 2)
+    visible[..., 0, 0] = 1.0
+    # smooth_l1(5px, beta=2.0): linear region -> 5 - 0.5*2 = 4.0. v contributes 0.
+    # Mask covers u and v at (0,0), so mean = (4 + 0) / 2 = 2.0.
+    out = uv_smooth_l1_pixel_loss(pred, target, visible, view_h=view_h, view_w=view_w, beta_px=2.0)
+    assert pytest.approx(float(out), abs=1e-5) == 2.0
+
+
+def test_compute_v6_copy_stage_loss_pixel_mode_keys():
+    from models.losses_v6 import V6CopyLossWeights, compute_v6_copy_stage_loss
+
+    view = torch.rand(1, 3, 32, 48)
+    uv = torch.zeros(1, 2, 8, 8, requires_grad=True)
+    conf = torch.zeros(1, 1, 8, 8, requires_grad=True)
+    target = torch.rand(1, 3, 8, 8)
+    visible = torch.zeros(1, 1, 8, 8)
+    visible[..., 2:6, 2:6] = 1.0
+    uv_target = torch.zeros(1, 2, 8, 8)
+    out = compute_v6_copy_stage_loss(
+        view=view,
+        uv_pred=uv,
+        conf_logits=conf,
+        target_rgb=target,
+        visible_mask=visible,
+        uv_target=uv_target,
+        weights=V6CopyLossWeights(),
+        uv_loss_mode="pixel",
+        uv_beta_px=2.0,
+    )
+    assert set(out) == {"total", "copy_rgb", "conf", "uv", "uv_tv"}
+    out["total"].backward()
+    assert uv.grad is not None and uv.grad.abs().sum() > 0
+
+
+def test_compute_v6_copy_stage_loss_rejects_unknown_mode():
+    from models.losses_v6 import V6CopyLossWeights, compute_v6_copy_stage_loss
+
+    view = torch.rand(1, 3, 32, 48)
+    uv = torch.zeros(1, 2, 8, 8)
+    conf = torch.zeros(1, 1, 8, 8)
+    target = torch.zeros(1, 3, 8, 8)
+    visible = torch.zeros(1, 1, 8, 8)
+    uv_target = torch.zeros(1, 2, 8, 8)
+    with pytest.raises(ValueError, match="unknown uv_loss_mode"):
+        compute_v6_copy_stage_loss(
+            view=view,
+            uv_pred=uv,
+            conf_logits=conf,
+            target_rgb=target,
+            visible_mask=visible,
+            uv_target=uv_target,
+            weights=V6CopyLossWeights(),
+            uv_loss_mode="bogus",
+        )
+
+
 def test_uv_tv_zero_on_constant_field():
     from models.losses_v6 import uv_total_variation_loss
 
