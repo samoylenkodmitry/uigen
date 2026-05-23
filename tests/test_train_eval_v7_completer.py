@@ -99,6 +99,12 @@ def test_eval_reloads_checkpoint_and_reports_metrics(tmp_path):
     for file_name in TRAINABLE_EXPORT_FILES:
         entry = result["per_file"][file_name]
         assert {"supported_mae", "hit5", "sobel_mae", "samples"} <= set(entry)
+    # Per-skin breakdown: with one skin id ("default"), there should be
+    # exactly one entry and its shape mirrors the per-file shape.
+    assert set(result["per_skin"]) == {"default"}
+    skin_entry = result["per_skin"]["default"]
+    assert {"supported_mae", "hit5", "sobel_mae", "samples"} <= set(skin_entry)
+    assert skin_entry["samples"] > 0
 
 
 def test_trainer_rejects_non_v7_checkpoint_at_eval(tmp_path):

@@ -72,6 +72,13 @@ def evaluate(
     per_file_sobel: dict[str, float] = {s.file_name: 0.0 for s in TRAINABLE_EXPORT_SPECS}
     per_file_n: dict[str, int] = {s.file_name: 0 for s in TRAINABLE_EXPORT_SPECS}
     per_file_count: dict[str, int] = {s.file_name: 0 for s in TRAINABLE_EXPORT_SPECS}
+    # Per-skin accumulators (resolved at first sample because the dataset may
+    # contain any subset of skin ids).
+    per_skin_mae: dict[str, float] = {}
+    per_skin_hit: dict[str, float] = {}
+    per_skin_sobel: dict[str, float] = {}
+    per_skin_n: dict[str, int] = {}
+    per_skin_count: dict[str, int] = {}
 
     if mask_samples < 1:
         raise ValueError(f"mask_samples must be >= 1, got {mask_samples}")
@@ -84,6 +91,9 @@ def evaluate(
             for batch in loader:
                 file_names = batch["file_name"]
                 file_name = file_names[0] if isinstance(file_names, list) else file_names
+                skin_ids = batch["skin_id"]
+                if not isinstance(skin_ids, list):
+                    skin_ids = [skin_ids]
                 observed_rgb = batch["observed_rgb"].to(device)
                 observed_mask = batch["observed_mask"].to(device)
                 target_rgb = batch["target_rgb"].to(device)
@@ -101,6 +111,22 @@ def evaluate(
                 per_file_sobel[file_name] += sob * n_support * b
                 per_file_n[file_name] += n_support * b
                 per_file_count[file_name] += b
+                # Per-skin accumulators. Items in a batch may come from
+                # different skins (the sampler groups by file, not by
+                # skin), so credit each item to its own skin_id.
+                for sid in skin_ids:
+                    sid = str(sid)
+                    if sid not in per_skin_n:
+                        per_skin_mae[sid] = 0.0
+                        per_skin_hit[sid] = 0.0
+                        per_skin_sobel[sid] = 0.0
+                        per_skin_n[sid] = 0
+                        per_skin_count[sid] = 0
+                    per_skin_mae[sid] += mae * n_support
+                    per_skin_hit[sid] += hit * n_support
+                    per_skin_sobel[sid] += sob * n_support
+                    per_skin_n[sid] += n_support
+                    per_skin_count[sid] += 1
 
     per_file: dict[str, dict[str, float]] = {}
     agg_mae_num = agg_mae_den = 0.0
@@ -131,7 +157,22 @@ def evaluate(
         "sobel_mae":   agg_sob_num / max(1.0, agg_mae_den),
         "mask_samples": mask_samples,
     }
-    return {"aggregate": aggregate, "per_file": per_file}
+    per_skin: dict[str, dict[str, float]] = {}
+    for sid in sorted(per_skin_n.keys()):
+        n = per_skin_n[sid]
+        if n == 0:
+            per_skin[sid] = {
+                "supported_mae": float("nan"), "hit5": float("nan"), "sobel_mae": float("nan"),
+                "samples": per_skin_count[sid],
+            }
+            continue
+        per_skin[sid] = {
+            "supported_mae": per_skin_mae[sid] / n,
+            "hit5":        per_skin_hit[sid] / n,
+            "sobel_mae":   per_skin_sobel[sid] / n,
+            "samples":     per_skin_count[sid],
+        }
+    return {"aggregate": aggregate, "per_file": per_file, "per_skin": per_skin}
 
 
 def parse_skin_sources(spec: str) -> dict[str, str]:
