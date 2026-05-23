@@ -42,16 +42,22 @@ from atlas_ai.state_families import StateRect, group_by_family
 
 @dataclass(frozen=True)
 class V7MaskWeights:
-    """Mix probability for the four observed-mask families. Sum is normalized
-    to 1.0; absolute scale does not matter."""
+    """Mix probability for the observed-mask families. Sum is normalized
+    to 1.0; absolute scale does not matter.
+
+    `passthrough` (mask=ones) defaults to 0 so the V7 plan default mix is
+    unchanged. Set it >0 to run the all-observed copy-through diagnostic
+    where the model sees the target everywhere within the support mask.
+    """
     provenance: float = 0.40
     state_family: float = 0.35
     random_rect: float = 0.20
     whole_file: float = 0.05
+    passthrough: float = 0.0
 
 
 # Modes in a fixed order so weight redistribution is deterministic.
-MASK_MODES = ("provenance", "state_family", "random_rect", "whole_file")
+MASK_MODES = ("provenance", "state_family", "random_rect", "whole_file", "passthrough")
 
 
 def make_provenance_mask(
@@ -132,16 +138,33 @@ def make_whole_file_mask(h: int, w: int) -> np.ndarray:
     return np.zeros((h, w), dtype=np.uint8)
 
 
+def make_passthrough_mask(h: int, w: int) -> np.ndarray:
+    """Observe everywhere (mask is all ones). Diagnostic mode: when used as
+    the only mask source, the completer is given the target as input and
+    must learn a near-identity inside the support region."""
+    return np.ones((h, w), dtype=np.uint8)
+
+
 def _normalize_weights(
     weights: V7MaskWeights,
     have_provenance: bool,
     have_state_family: bool,
 ) -> dict[str, float]:
+    """Normalize the mask-mode weights for sampling.
+
+    `state_family` weight is kept even when the file has no multi-rect family
+    available - in that case make_state_family_mask returns an all-ones
+    passthrough as a safe fallback, so the requested mode is still honored
+    in spirit (and the caller's other-mode shares aren't silently inflated).
+    Provenance, by contrast, requires a non-empty pool and is redistributed
+    when unavailable.
+    """
     raw = {
         "provenance": weights.provenance if have_provenance else 0.0,
-        "state_family": weights.state_family if have_state_family else 0.0,
+        "state_family": weights.state_family,
         "random_rect": weights.random_rect,
         "whole_file": weights.whole_file,
+        "passthrough": weights.passthrough,
     }
     total = sum(raw.values())
     if total <= 0:
@@ -176,6 +199,8 @@ def sample_v7_observed_mask(
         return make_random_rect_mask(rng, h, w), mode
     if mode == "whole_file":
         return make_whole_file_mask(h, w), mode
+    if mode == "passthrough":
+        return make_passthrough_mask(h, w), mode
     raise ValueError(f"impossible mode {mode!r}")  # pragma: no cover
 
 
@@ -197,6 +222,7 @@ __all__ = [
     "make_state_family_mask",
     "make_random_rect_mask",
     "make_whole_file_mask",
+    "make_passthrough_mask",
     "sample_v7_observed_mask",
     "apply_observed_mask",
 ]

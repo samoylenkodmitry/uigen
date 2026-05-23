@@ -5,6 +5,17 @@ without the observer/copy path. The model is a small masked U-Net that takes
 per-file partial RGB + observation mask + file identity + Fourier coords and
 outputs a complete clean BMP prediction at the file's exact dimensions.
 
+The output uses a hard observed-mask copy:
+
+    generated_rgb = sigmoid(rgb_logits)
+    final_rgb = observed_mask * observed_rgb + (1 - observed_mask) * generated_rgb
+
+This is the completer's contract per the V7 plan: known pixels are known by
+construction, only hidden pixels go through the generated branch. The model
+never has to learn to pass through observed pixels - that bypass is exact -
+and the support_masked loss focuses every gradient on the hidden pixels
+where the model actually has something to do.
+
 Inputs per file:
     observed_rgb  [B, 3, H, W]   in [0, 1]; hidden pixels are zero
     observed_mask [B, 1, H, W]   in {0, 1}; 1 where the model is told the value
@@ -166,7 +177,11 @@ class V7Completer(nn.Module):
         u2 = self.fuse2(torch.cat([u2, f2], dim=1))
         u1 = F.interpolate(u2, size=f1.shape[-2:], mode="nearest")
         u1 = self.fuse1(torch.cat([u1, f1], dim=1))
-        return torch.sigmoid(self.out_proj(u1))
+        generated_rgb = torch.sigmoid(self.out_proj(u1))
+        # Hard observed-mask copy: known pixels are known by construction;
+        # only hidden pixels go through the generated branch. observed_mask
+        # broadcasts from [B, 1, H, W] across the 3 RGB channels.
+        return observed_mask * observed_rgb + (1.0 - observed_mask) * generated_rgb
 
 
 __all__ = ["V7Completer", "DEFAULT_FREQUENCIES"]

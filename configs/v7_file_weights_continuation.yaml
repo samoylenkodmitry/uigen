@@ -1,0 +1,24 @@
+# V7 file sampling weights, post-30k Gate A diagnosis (2026-05-23).
+#
+# Bumps applied vs. the trainer default:
+#   MONOSTER: 2 -> 8  (was the worst file at 30k; under-allocated)
+#   CBUTTONS: 4 -> 6  (still failing both gates at 30k)
+#   VOLUME:   3 -> 5  (both gates miss)
+#   PLAYPAUS: 1 -> 2  (close on hit5)
+#   BALANCE:  3 -> 4
+# Kept:
+#   EQMAIN:   8  (large, historically fragile)
+#   MAIN/TITLEBAR/SHUFREP/PLEDIT: 4
+#   POSBAR:   1  (already passing both gates)
+
+EQMAIN.bmp:   8
+MAIN.bmp:     4
+TITLEBAR.bmp: 4
+SHUFREP.bmp:  4
+PLEDIT.bmp:   4
+CBUTTONS.bmp: 6
+VOLUME.bmp:   5
+BALANCE.bmp:  4
+MONOSTER.bmp: 8
+POSBAR.bmp:   1
+PLAYPAUS.bmp: 2

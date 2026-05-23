@@ -33,9 +33,28 @@ sys.path.insert(0, str(REPO_ROOT))
 from atlas_ai.dataset_v7_completion import V7CompletionDataset
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
 from atlas_ai.support_mask import load_support_masks
-from atlas_ai.v7_batching import SameFileBatchSampler
-from models.losses_v7 import support_masked_l1_loss
+from atlas_ai.v7_batching import SameFileBatchSampler, WeightedSameFileBatchSampler
+from atlas_ai.v7_masks import V7MaskWeights
+from models.losses_v7 import support_masked_l1_loss, support_masked_sobel_mae
 from models.v7_completer import V7Completer
+
+
+# Default file sampling weights for the weighted sampler. Hard / large files
+# get more updates than tiny / simple ones. Matches the V7 handoff
+# recommendation that was derived from the EQMAIN-only probe diagnosis.
+DEFAULT_FILE_WEIGHTS: dict[str, float] = {
+    "EQMAIN.bmp":   8.0,
+    "MAIN.bmp":     4.0,
+    "TITLEBAR.bmp": 4.0,
+    "CBUTTONS.bmp": 4.0,
+    "SHUFREP.bmp":  4.0,
+    "PLEDIT.bmp":   4.0,
+    "VOLUME.bmp":   3.0,
+    "BALANCE.bmp":  3.0,
+    "MONOSTER.bmp": 2.0,
+    "POSBAR.bmp":   1.0,
+    "PLAYPAUS.bmp": 1.0,
+}
 
 
 FILE_TO_ID: dict[str, int] = {spec.file_name: idx for idx, spec in enumerate(TRAINABLE_EXPORT_SPECS)}
@@ -73,6 +92,8 @@ def compute_step_loss(
     batch: dict,
     support_masks: dict[str, torch.Tensor],
     device: torch.device,
+    *,
+    sobel_weight: float = 0.0,
 ) -> dict[str, torch.Tensor]:
     observed_rgb = batch["observed_rgb"].to(device, non_blocking=True)
     observed_mask = batch["observed_mask"].to(device, non_blocking=True)
@@ -94,7 +115,16 @@ def compute_step_loss(
     final_rgb = model(observed_rgb, observed_mask, file_id)
     support = support_masks[file_name].to(device=device, dtype=final_rgb.dtype)
     l1 = support_masked_l1_loss(final_rgb, target_rgb, support)
-    return {"total": l1, "l1": l1.detach()}
+    out = {"l1": l1.detach()}
+    if sobel_weight > 0.0:
+        sobel = support_masked_sobel_mae(final_rgb, target_rgb, support)
+        total = l1 + sobel_weight * sobel
+        out["sobel"] = sobel.detach()
+    else:
+        total = l1
+        out["sobel"] = torch.zeros((), device=device)
+    out["total"] = total
+    return out
 
 
 def main() -> int:
@@ -120,6 +150,35 @@ def main() -> int:
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    # V7 mask mix weights (defaults match the V7 plan).
+    parser.add_argument("--mask-provenance", type=float, default=0.40)
+    parser.add_argument("--mask-state-family", type=float, default=0.35)
+    parser.add_argument("--mask-random-rect", type=float, default=0.20)
+    parser.add_argument("--mask-whole-file", type=float, default=0.05)
+    parser.add_argument("--mask-passthrough", type=float, default=0.0,
+                        help="Diagnostic mode: mask=ones inside the support; >0 enables "
+                             "the all-observed copy-through probe.")
+    parser.add_argument("--only-file", default=None,
+                        help="Filter the dataset to one file_name (e.g. EQMAIN.bmp) for "
+                             "per-file overfit probes.")
+    parser.add_argument("--resume-from", default=None,
+                        help="Path to a V7 completer .safetensors checkpoint whose weights "
+                             "seed the model. Steps restart at 0; the new --out is "
+                             "independent of the source run.")
+    parser.add_argument("--sobel-weight", type=float, default=0.0,
+                        help="Edge-precision loss weight. When >0, training total = "
+                             "l1 + sobel_weight * support_masked_sobel_mae. Default 0 "
+                             "keeps the historical L1-only recipe.")
+    parser.add_argument("--pixel-hit-weight", type=float, default=0.0,
+                        help="Reserved for a future pixel-margin loss attacking pixels "
+                             "just over the 5/255 hit5 threshold. Not yet implemented.")
+    parser.add_argument("--sampling-mode", choices=["epoch", "weighted"], default="epoch",
+                        help="Batch sampling strategy. 'epoch' = round-robin "
+                             "(SameFileBatchSampler), 'weighted' = file-weighted "
+                             "with replacement (WeightedSameFileBatchSampler).")
+    parser.add_argument("--file-sampling-weights", default=None,
+                        help="Path to a YAML file mapping file_name -> weight. "
+                             "Overrides the built-in default. Only used in weighted mode.")
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -127,15 +186,45 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     skin_sources = parse_skin_sources(args.skin_sources)
+    mask_weights = V7MaskWeights(
+        provenance=args.mask_provenance,
+        state_family=args.mask_state_family,
+        random_rect=args.mask_random_rect,
+        whole_file=args.mask_whole_file,
+        passthrough=args.mask_passthrough,
+    )
     dataset = V7CompletionDataset(
         skin_sources=skin_sources,
         state_families_path=args.state_families,
+        mask_weights=mask_weights,
         seed=args.seed,
     )
+    if args.only_file:
+        keep = args.only_file
+        dataset.items = [(s, f) for (s, f) in dataset.items if f == keep]
+        if not dataset.items:
+            raise SystemExit(f"--only-file {keep!r}: no matching items in dataset")
+        print(f"--only-file {keep!r}: kept {len(dataset.items)} item(s)")
     generator = torch.Generator().manual_seed(args.seed)
-    sampler = SameFileBatchSampler(
-        dataset.items, batch_size=args.batch, shuffle=True, generator=generator,
-    )
+    if args.sampling_mode == "weighted":
+        file_weights = dict(DEFAULT_FILE_WEIGHTS)
+        if args.file_sampling_weights:
+            import yaml
+            override = yaml.safe_load(Path(args.file_sampling_weights).read_text(encoding="utf-8"))
+            if not isinstance(override, dict):
+                raise SystemExit(f"{args.file_sampling_weights}: expected a mapping")
+            file_weights.update({str(k): float(v) for k, v in override.items()})
+        sampler = WeightedSameFileBatchSampler(
+            dataset.items, batch_size=args.batch,
+            file_weights=file_weights, num_batches=args.steps,
+            generator=generator,
+        )
+        print(f"weighted sampling: {sampler.num_batches} batches, "
+              f"file weights {dict(zip(sampler.files, [round(float(p), 3) for p in sampler.probs.tolist()]))}")
+    else:
+        sampler = SameFileBatchSampler(
+            dataset.items, batch_size=args.batch, shuffle=True, generator=generator,
+        )
     loader = DataLoader(
         dataset,
         batch_sampler=sampler,
@@ -148,6 +237,20 @@ def main() -> int:
         base_channels=args.base_channels,
         file_embedding_dim=args.file_embedding_dim,
     ).to(device)
+
+    if args.resume_from:
+        from safetensors.torch import load_file
+        resume_state = load_file(str(Path(args.resume_from)))
+        version = int(resume_state.get("model_version", torch.tensor([0])).reshape(-1)[0].item())
+        if version != 70:
+            raise SystemExit(f"--resume-from expects V7 completer (version 70), got {version}")
+        missing, unexpected = model.load_state_dict(resume_state, strict=False)
+        if missing:
+            raise SystemExit(f"--resume-from missing keys: {sorted(missing)[:5]}...")
+        if unexpected:
+            raise SystemExit(f"--resume-from unexpected keys: {sorted(unexpected)[:5]}...")
+        print(f"resumed weights from {args.resume_from}")
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr, weight_decay=args.weight_decay, betas=(0.9, 0.95),
@@ -168,15 +271,24 @@ def main() -> int:
     step = 0
     epoch = 0
     model.train()
+    weighted_mode = args.sampling_mode == "weighted"
     with metrics_path.open("w", encoding="utf-8") as metrics_file:
         while step < args.steps:
             dataset.set_epoch(epoch)
             for batch in loader:
                 if step >= args.steps:
                     break
+                # Weighted sampling samples each file with replacement: the
+                # same (skin, file) index can recur many times in one run.
+                # Vary dataset.epoch per step so masks stay fresh.
+                if weighted_mode:
+                    dataset.set_epoch(step)
                 optimizer.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda", enabled=args.amp and device.type == "cuda"):
-                    losses = compute_step_loss(model, batch, support_masks, device)
+                    losses = compute_step_loss(
+                        model, batch, support_masks, device,
+                        sobel_weight=args.sobel_weight,
+                    )
                 if args.amp and device.type == "cuda":
                     scaler.scale(losses["total"]).backward()
                     scaler.step(optimizer)

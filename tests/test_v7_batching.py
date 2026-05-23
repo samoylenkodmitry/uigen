@@ -9,9 +9,11 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
+from collections import Counter
+
 from atlas_ai.dataset_v7_completion import V7CompletionDataset
 from atlas_ai.export_spec import TRAINABLE_EXPORT_FILES, TRAINABLE_EXPORT_SPECS
-from atlas_ai.v7_batching import SameFileBatchSampler
+from atlas_ai.v7_batching import SameFileBatchSampler, WeightedSameFileBatchSampler
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,6 +112,114 @@ def test_real_dataloader_does_not_mix_shapes():
         assert batch["observed_rgb"].shape == (b, 3, spec.h, spec.w)
         count += 1
     assert count == len(sampler)
+
+
+def test_weighted_sampler_never_mixes_file_shapes():
+    items = _items_for_n_skins(3)
+    weights = {f: 1.0 for f in TRAINABLE_EXPORT_FILES}
+    sampler = WeightedSameFileBatchSampler(
+        items, batch_size=2, file_weights=weights, num_batches=100,
+        generator=torch.Generator().manual_seed(0),
+    )
+    for batch in sampler:
+        files = {items[idx][1] for idx in batch}
+        assert len(files) == 1, files
+
+
+def test_weighted_sampler_emits_exactly_num_batches():
+    items = _items_for_n_skins(2)
+    weights = {f: 1.0 for f in TRAINABLE_EXPORT_FILES}
+    sampler = WeightedSameFileBatchSampler(
+        items, batch_size=1, file_weights=weights, num_batches=37,
+        generator=torch.Generator().manual_seed(0),
+    )
+    assert len(sampler) == 37
+    assert sum(1 for _ in sampler) == 37
+
+
+def test_weighted_sampler_distribution_matches_weights():
+    items = _items_for_n_skins(3)
+    weights = {
+        "MAIN.bmp":     4.0,
+        "EQMAIN.bmp":   8.0,
+        "PLAYPAUS.bmp": 1.0,
+        # the rest have weight 0 -> skipped
+    }
+    n = 5000
+    sampler = WeightedSameFileBatchSampler(
+        items, batch_size=1, file_weights=weights, num_batches=n,
+        generator=torch.Generator().manual_seed(42),
+    )
+    counts: Counter[str] = Counter()
+    for batch in sampler:
+        counts[items[batch[0]][1]] += 1
+    # Only the three weighted files should ever appear.
+    assert set(counts) == {"MAIN.bmp", "EQMAIN.bmp", "PLAYPAUS.bmp"}
+    # Empirical fractions within 3% of normalized weights.
+    total_w = 4.0 + 8.0 + 1.0
+    expected = {
+        "MAIN.bmp": 4.0 / total_w,
+        "EQMAIN.bmp": 8.0 / total_w,
+        "PLAYPAUS.bmp": 1.0 / total_w,
+    }
+    for file_name, want in expected.items():
+        got = counts[file_name] / n
+        assert abs(got - want) < 0.03, f"{file_name}: want {want:.3f} got {got:.3f}"
+
+
+def test_weighted_sampler_one_skin_replacement_works():
+    """With one skin, every file has exactly one item. Weighted sampling
+    with replacement still yields batch_size > 1 from that one item."""
+    items = _items_for_n_skins(1)
+    weights = {"EQMAIN.bmp": 1.0}
+    sampler = WeightedSameFileBatchSampler(
+        items, batch_size=4, file_weights=weights, num_batches=5,
+        generator=torch.Generator().manual_seed(0),
+    )
+    expected_index = next(i for i, (_, f) in enumerate(items) if f == "EQMAIN.bmp")
+    for batch in sampler:
+        assert len(batch) == 4
+        assert all(idx == expected_index for idx in batch)
+
+
+def test_weighted_sampler_rejects_no_positive_weights():
+    items = _items_for_n_skins(1)
+    weights = {f: 0.0 for f in TRAINABLE_EXPORT_FILES}
+    with pytest.raises(ValueError, match="positive weight"):
+        WeightedSameFileBatchSampler(
+            items, batch_size=1, file_weights=weights, num_batches=10,
+        )
+
+
+def test_weighted_sampler_rejects_invalid_args():
+    items = _items_for_n_skins(1)
+    weights = {"EQMAIN.bmp": 1.0}
+    with pytest.raises(ValueError):
+        WeightedSameFileBatchSampler(items, batch_size=0,
+                                     file_weights=weights, num_batches=10)
+    with pytest.raises(ValueError):
+        WeightedSameFileBatchSampler(items, batch_size=1,
+                                     file_weights=weights, num_batches=0)
+
+
+def test_weighted_sampler_with_real_dataloader():
+    """End-to-end: weighted sampler drives a real DataLoader on V7Dataset."""
+    dataset = V7CompletionDataset(
+        skin_sources={"a": DEFAULT_SKIN},
+        state_families_path=CONFIG,
+    )
+    weights = {"EQMAIN.bmp": 8.0, "MAIN.bmp": 4.0, "PLAYPAUS.bmp": 1.0}
+    sampler = WeightedSameFileBatchSampler(
+        dataset.items, batch_size=1, file_weights=weights, num_batches=20,
+        generator=torch.Generator().manual_seed(0),
+    )
+    loader = DataLoader(dataset, batch_sampler=sampler, num_workers=0)
+    files_seen: Counter[str] = Counter()
+    for batch in loader:
+        assert len(set(batch["file_name"])) == 1
+        files_seen[batch["file_name"][0]] += 1
+    assert set(files_seen) <= set(weights)
+    assert sum(files_seen.values()) == 20
 
 
 def test_default_dataloader_mixed_shapes_explodes_loudly():

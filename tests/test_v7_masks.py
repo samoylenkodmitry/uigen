@@ -42,6 +42,24 @@ def test_whole_file_mask_zeros():
     assert mask.sum() == 0
 
 
+def test_passthrough_mask_all_ones():
+    from atlas_ai.v7_masks import make_passthrough_mask
+    mask = make_passthrough_mask(8, 16)
+    assert mask.shape == (8, 16)
+    assert mask.dtype == np.uint8
+    assert int(mask.sum()) == 8 * 16
+
+
+def test_sample_v7_passthrough_only_forces_ones():
+    from atlas_ai.v7_masks import sample_v7_observed_mask
+    weights = V7MaskWeights(provenance=0.0, state_family=0.0, random_rect=0.0,
+                            whole_file=0.0, passthrough=1.0)
+    rng = np.random.default_rng(0)
+    mask, mode = sample_v7_observed_mask(rng, h=10, w=20, weights=weights)
+    assert mode == "passthrough"
+    assert int(mask.sum()) == 10 * 20
+
+
 def test_provenance_mask_rejects_empty_pool():
     rng = np.random.default_rng(0)
     with pytest.raises(ValueError, match="empty"):
@@ -156,6 +174,7 @@ def test_sample_v7_distribution_matches_weights_when_available():
         "state_family": weights.state_family,
         "random_rect": weights.random_rect,
         "whole_file": weights.whole_file,
+        "passthrough": weights.passthrough,
     }
     for mode in MASK_MODES:
         observed_frac = counts[mode] / n

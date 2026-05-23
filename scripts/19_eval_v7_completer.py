@@ -159,6 +159,11 @@ def main() -> int:
     parser.add_argument("--mask-samples", type=int, default=4)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out-json", default=None)
+    parser.add_argument("--mask-provenance", type=float, default=0.40)
+    parser.add_argument("--mask-state-family", type=float, default=0.35)
+    parser.add_argument("--mask-random-rect", type=float, default=0.20)
+    parser.add_argument("--mask-whole-file", type=float, default=0.05)
+    parser.add_argument("--mask-passthrough", type=float, default=0.0)
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -166,7 +171,13 @@ def main() -> int:
     dataset = V7CompletionDataset(
         skin_sources=skin_sources,
         state_families_path=args.state_families,
-        mask_weights=V7MaskWeights(),
+        mask_weights=V7MaskWeights(
+            provenance=args.mask_provenance,
+            state_family=args.mask_state_family,
+            random_rect=args.mask_random_rect,
+            whole_file=args.mask_whole_file,
+            passthrough=args.mask_passthrough,
+        ),
         seed=args.seed,
     )
     sampler = SameFileBatchSampler(

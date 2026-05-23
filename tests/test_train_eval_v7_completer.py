@@ -51,14 +51,17 @@ def test_trainer_smoke_runs_and_writes_artifacts(tmp_path):
 
 
 def test_trainer_loss_drops_over_few_steps(tmp_path):
-    """Sanity that the model actually trains: total loss decreases from
-    start over a handful of steps. Not an acceptance check."""
+    """Sanity that the model actually trains: total loss decreases over a
+    handful of steps. Skip rows where the hard-mask copy made loss exactly
+    zero (e.g. state_family fallback on MAIN.bmp -> mask=ones)."""
     run = tmp_path / "v7_run"
     subprocess.run(_trainer_args(run, "--steps", "20"), check=True)
     metrics = [json.loads(l) for l in (run / "metrics.jsonl").read_text().splitlines()]
-    first = metrics[0]["total"]
-    last_avg = sum(m["total"] for m in metrics[-5:]) / 5.0
-    assert last_avg < first, f"loss did not drop: first={first} last_avg={last_avg}"
+    nonzero = [m for m in metrics if m["total"] > 0.0]
+    assert len(nonzero) >= 5, "too few non-trivial training steps"
+    first_avg = sum(m["total"] for m in nonzero[: max(1, len(nonzero) // 4)]) / max(1, len(nonzero) // 4)
+    last_avg = sum(m["total"] for m in nonzero[-max(1, len(nonzero) // 4):]) / max(1, len(nonzero) // 4)
+    assert last_avg < first_avg, f"loss did not drop: first_avg={first_avg} last_avg={last_avg}"
 
 
 def test_eval_reloads_checkpoint_and_reports_metrics(tmp_path):
