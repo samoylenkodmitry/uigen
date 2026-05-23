@@ -58,6 +58,39 @@ def _detect_v7_kwargs(state: dict) -> dict:
     }
 
 
+def _sample_metrics(
+    final_rgb: torch.Tensor,
+    target_rgb: torch.Tensor,
+    support: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return per-sample (mae, hit5, sobel_mae) on support pixels."""
+    b = final_rgb.shape[0]
+    mask = support
+    if mask.dim() == 2:
+        mask = mask.unsqueeze(0).unsqueeze(0)
+    elif mask.dim() == 3:
+        mask = mask.unsqueeze(0)
+    mask = mask.to(device=final_rgb.device, dtype=final_rgb.dtype)
+    mask3 = mask.expand_as(final_rgb)
+    denom3 = mask3.flatten(1).sum(dim=1).clamp_min(1.0)
+
+    mae = ((final_rgb - target_rgb).abs() * mask3).flatten(1).sum(dim=1) / denom3
+
+    diff_255 = (final_rgb - target_rgb).abs() * 255.0
+    hit_map = (diff_255 <= 5.0).all(dim=1, keepdim=True).to(final_rgb.dtype)
+    mask1 = mask.expand_as(hit_map)
+    denom1 = mask1.flatten(1).sum(dim=1).clamp_min(1.0)
+    hit5 = (hit_map * mask1).flatten(1).sum(dim=1) / denom1
+
+    sobels = []
+    for i in range(b):
+        sobels.append(support_masked_sobel_mae(
+            final_rgb[i:i + 1], target_rgb[i:i + 1], support,
+        ))
+    sobel = torch.stack(sobels)
+    return mae, hit5, sobel
+
+
 def evaluate(
     model: V7Completer,
     loader: DataLoader,
@@ -101,9 +134,12 @@ def evaluate(
                 file_id = torch.full((b,), FILE_TO_ID[file_name], dtype=torch.long, device=device)
                 final_rgb = model(observed_rgb, observed_mask, file_id)
                 support = support_masks[file_name].to(device=device, dtype=final_rgb.dtype)
-                mae = float(support_masked_l1_loss(final_rgb, target_rgb, support).item())
-                hit = float(support_masked_hit5(final_rgb, target_rgb, support).item())
-                sob = float(support_masked_sobel_mae(final_rgb, target_rgb, support).item())
+                mae_by_sample, hit_by_sample, sob_by_sample = _sample_metrics(
+                    final_rgb, target_rgb, support,
+                )
+                mae = float(mae_by_sample.mean().item())
+                hit = float(hit_by_sample.mean().item())
+                sob = float(sob_by_sample.mean().item())
                 n_support = int(support.bool().sum().item())
                 # Accumulate weighted by per-sample support count.
                 per_file_mae[file_name] += mae * n_support * b
@@ -114,7 +150,7 @@ def evaluate(
                 # Per-skin accumulators. Items in a batch may come from
                 # different skins (the sampler groups by file, not by
                 # skin), so credit each item to its own skin_id.
-                for sid in skin_ids:
+                for i, sid in enumerate(skin_ids):
                     sid = str(sid)
                     if sid not in per_skin_n:
                         per_skin_mae[sid] = 0.0
@@ -122,9 +158,9 @@ def evaluate(
                         per_skin_sobel[sid] = 0.0
                         per_skin_n[sid] = 0
                         per_skin_count[sid] = 0
-                    per_skin_mae[sid] += mae * n_support
-                    per_skin_hit[sid] += hit * n_support
-                    per_skin_sobel[sid] += sob * n_support
+                    per_skin_mae[sid] += float(mae_by_sample[i].item()) * n_support
+                    per_skin_hit[sid] += float(hit_by_sample[i].item()) * n_support
+                    per_skin_sobel[sid] += float(sob_by_sample[i].item()) * n_support
                     per_skin_n[sid] += n_support
                     per_skin_count[sid] += 1
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import torch
 
 from atlas_ai.export_spec import TRAINABLE_EXPORT_FILES
 
@@ -106,6 +108,50 @@ def test_eval_reloads_checkpoint_and_reports_metrics(tmp_path):
     assert {"supported_mae", "hit5", "sobel_mae", "samples"} <= set(skin_entry)
     assert skin_entry["samples"] > 0
 
+
+def test_eval_per_skin_metrics_are_not_batch_averages():
+    """Same-file batches can contain multiple skins. Per-skin metrics must
+    use each sample's own prediction, not the batch mean assigned to both."""
+    spec = importlib.util.spec_from_file_location("eval_v7", EVAL_SCRIPT)
+    assert spec and spec.loader
+    eval_v7 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(eval_v7)
+
+    class _Dataset:
+        def set_epoch(self, _epoch): pass
+
+    class _Loader:
+        dataset = _Dataset()
+        def __iter__(self):
+            h, w = 4, 4
+            yield {
+                "file_name": ["MAIN.bmp", "MAIN.bmp"],
+                "skin_id": ["good", "bad"],
+                "observed_rgb": torch.stack([
+                    torch.zeros(3, h, w),
+                    torch.ones(3, h, w),
+                ]),
+                "observed_mask": torch.ones(2, 1, h, w),
+                "target_rgb": torch.zeros(2, 3, h, w),
+            }
+
+    class _IdentityModel:
+        def eval(self): pass
+        def __call__(self, observed_rgb, _observed_mask, _file_id):
+            return observed_rgb
+
+    result = eval_v7.evaluate(
+        _IdentityModel(),
+        _Loader(),
+        {"MAIN.bmp": torch.ones(4, 4, dtype=torch.bool)},
+        torch.device("cpu"),
+        mask_samples=1,
+    )
+    assert result["per_file"]["MAIN.bmp"]["supported_mae"] == pytest.approx(0.5)
+    assert result["per_skin"]["good"]["supported_mae"] == pytest.approx(0.0)
+    assert result["per_skin"]["good"]["hit5"] == pytest.approx(1.0)
+    assert result["per_skin"]["bad"]["supported_mae"] == pytest.approx(1.0)
+    assert result["per_skin"]["bad"]["hit5"] == pytest.approx(0.0)
 
 def test_trainer_rejects_non_v7_checkpoint_at_eval(tmp_path):
     """Eval script should fail clearly if the checkpoint is not V7."""
