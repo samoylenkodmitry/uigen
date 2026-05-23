@@ -1,0 +1,23 @@
+# Colab runtime.
+#
+# Colab layout:
+#   /content/                       VM-local scratch; lost when the VM stops
+#   /content/drive/MyDrive/         optional Google Drive mount for persistence
+#
+# The runtime declares both VM-local paths (for runs/cache) and optional Drive
+# paths the experiment runner can sync to/from. Drive mounting itself is the
+# notebook's responsibility (drive.mount('/content/drive')).
+
+name: colab
+
+paths:
+  repo_dir: /content/uigen
+  data_dir: /content/uigen_data
+  runs_dir: /content/runs
+  cache_dir: /content/cache
+  drive_runs_dir: /content/drive/MyDrive/uigen_runs
+  drive_data_dir: /content/drive/MyDrive/uigen_data
+
+num_workers: 2
+device: cuda
+amp: true

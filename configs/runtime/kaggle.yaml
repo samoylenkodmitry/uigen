@@ -1,0 +1,20 @@
+# Kaggle Notebook runtime.
+#
+# Kaggle layout:
+#   /kaggle/working/   per-run writable, kept on Save & Run All
+#   /kaggle/input/     read-only input datasets attached to the notebook
+#
+# The expected dataset slug is "uigen-data"; attach it via "Add data ->
+# Your datasets" in the notebook UI.
+
+name: kaggle
+
+paths:
+  repo_dir: /kaggle/working/uigen
+  data_dir: /kaggle/input/uigen-data
+  runs_dir: /kaggle/working/runs
+  cache_dir: /kaggle/working/cache
+
+num_workers: 2
+device: cuda
+amp: true

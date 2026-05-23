@@ -1,0 +1,60 @@
+# V7 Phase 0 / Gate B — 16-skin asset completion.
+#
+# Recipe locked from Gate A (one-skin): hard-mask copy, weighted same-file
+# sampler with default V7 weights, c48, sobel-weight 0.25, support-masked
+# L1 + sobel loss. Architecture is not changed in Gate B.
+#
+# Path conventions in this YAML:
+#   - Plain repo-relative strings (e.g. configs/...) resolve under
+#     runtime.paths.repo_dir.
+#   - Strings prefixed with "@data/" resolve under runtime.paths.data_dir.
+#   - Strings prefixed with "@runs/" resolve under runtime.paths.runs_dir.
+#   - Absolute paths are kept as-is.
+#
+# The runner is expected to expand `${skin_sources}` from the per-skin map
+# in `data:skin_sources_map`, which itself lives under data_dir.
+
+name: v7_completer_gateB
+trainer: train_v7_completer.py
+
+# Where the trainer writes its outputs; final path is runs_dir / out.
+out: "@runs/v7_completer_gateB_16skin"
+
+# Inputs.
+data:
+  state_families: configs/state_families_classic.yaml
+  # 16 entries in 'skin_id=path' form; resolved against data_dir.
+  # Placeholder for Gate B pre-launch decision: actual mapping is filled
+  # by the BMP-extraction script once it lands. Keep this template here
+  # so the experiment YAML format does not change at launch time.
+  skin_sources: "@data/data_v7_16skin_completion"
+
+# Trainer arguments. Keys here become CLI flags (`--key value`).
+args:
+  state-families: configs/state_families_classic.yaml
+  # If a single directory is given, the trainer falls back to using the
+  # subdirectory basename as skin id. For the 16-skin case the runner
+  # walks `@data/data_v7_16skin_completion` and assembles the comma list.
+  steps: 80000
+  batch: 1
+  lr: 1.0e-3
+  weight-decay: 1.0e-4
+  base-channels: 48
+  file-embedding-dim: 32
+  sampling-mode: weighted
+  file-sampling-weights: configs/v7_file_weights_continuation.yaml
+  sobel-weight: 0.25
+  checkpoint-every: 5000
+  snapshot-every: 5000
+  seed: 0
+
+# Optional cosmetic metadata.
+notes: |
+  Phase 0 Gate B initial run. From scratch (no --resume-from).
+  Acceptance:
+    aggregate supported_mae < 0.015
+    aggregate hit5          > 0.90
+  Stronger ideal:
+    aggregate supported_mae < 0.010
+    aggregate hit5          > 0.95
+    no per-file hit5 below 0.85

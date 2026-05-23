@@ -1,0 +1,28 @@
+# Local development runtime. Pointed at the repo checkout used during V5/V6/V7.
+#
+# Use either of:
+#   UIGEN_RUNTIME=configs/runtime/local.yaml scripts/run_experiment.py …
+#   scripts/run_experiment.py --runtime configs/runtime/local.yaml …
+#
+# Path conventions:
+#   repo_dir   directory of the checked-out source.
+#   data_dir   root for input data (datasets, skin sources, etc.).
+#   runs_dir   root for training outputs; experiments place their `out`
+#              directory under this.
+#   cache_dir  scratch space for derived artifacts (provenance labels, etc).
+
+name: local
+
+# Paths in this YAML are resolved relative to this file's parent directory
+# (configs/runtime/), so "../.." reaches the repo root. This avoids
+# hardcoding any developer's absolute path. Override at runtime with
+# absolute paths or alternate runtime YAMLs.
+paths:
+  repo_dir: ../..
+  data_dir: ../..
+  runs_dir: ../../runs
+  cache_dir: ../../.cache
+
+num_workers: 0
+device: cuda
+amp: true

@@ -145,6 +145,12 @@ def main() -> int:
     parser.add_argument("--file-embedding-dim", type=int, default=32)
     parser.add_argument("--checkpoint-every", type=int, default=500)
     parser.add_argument("--snapshot-every", type=int, default=0)
+    parser.add_argument("--save-every", type=int, default=None,
+                        help="Alias for --snapshot-every (overrides it when set). "
+                             "Cloud-runner naming convention.")
+    parser.add_argument("--stop-after-minutes", type=float, default=0.0,
+                        help="Exit cleanly after this many minutes, saving "
+                             "last.safetensors. 0 = no limit.")
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--pin-memory", action="store_true")
     parser.add_argument("--amp", action="store_true")
@@ -184,6 +190,10 @@ def main() -> int:
     device = torch.device(args.device)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+
+    # --save-every is an alias for --snapshot-every (cloud-runner naming).
+    if args.save_every is not None:
+        args.snapshot_every = args.save_every
 
     skin_sources = parse_skin_sources(args.skin_sources)
     mask_weights = V7MaskWeights(
@@ -257,26 +267,53 @@ def main() -> int:
     )
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
 
+    env_info: dict = {
+        "torch_version": torch.__version__,
+        "cuda_available": torch.cuda.is_available(),
+        "device": str(device),
+    }
+    if device.type == "cuda" and torch.cuda.is_available():
+        try:
+            env_info["cuda_device_name"] = torch.cuda.get_device_name(device)
+            props = torch.cuda.get_device_properties(device)
+            env_info["cuda_total_memory_mib"] = props.total_memory // (1024 * 1024)
+        except Exception:
+            pass
+    try:
+        import platform as _platform
+        env_info["python_version"] = _platform.python_version()
+        env_info["platform"] = _platform.platform()
+    except Exception:
+        pass
+
     config = {
         "model_version": 70,
         "args": vars(args),
         "skin_sources": skin_sources,
         "dataset_size": len(dataset),
         "batches_per_epoch": len(sampler),
+        "env": env_info,
     }
     (out / "config.json").write_text(json.dumps(config, indent=2, sort_keys=True))
 
+    import time as _time
     metrics_path = out / "metrics.jsonl"
     best = float("inf")
     step = 0
     epoch = 0
     model.train()
     weighted_mode = args.sampling_mode == "weighted"
+    start_time = _time.monotonic()
+    stop_after_seconds = float(args.stop_after_minutes) * 60.0
+    stopped_by_time = False
     with metrics_path.open("w", encoding="utf-8") as metrics_file:
         while step < args.steps:
             dataset.set_epoch(epoch)
             for batch in loader:
                 if step >= args.steps:
+                    break
+                if stop_after_seconds > 0 and (_time.monotonic() - start_time) >= stop_after_seconds:
+                    stopped_by_time = True
                     break
                 # Weighted sampling samples each file with replacement: the
                 # same (skin, file) index can recur many times in one run.
@@ -312,9 +349,12 @@ def main() -> int:
                         model.state_dict(),
                     )
                 step += 1
+            if stopped_by_time:
+                break
             epoch += 1
     save_state_dict(out / "last.safetensors", model.state_dict())
-    print(f"trained V7Completer for {step} step(s); best step loss {best:.6f}")
+    reason = "stopped by --stop-after-minutes" if stopped_by_time else "finished"
+    print(f"trained V7Completer for {step} step(s) ({reason}); best step loss {best:.6f}")
     return 0
 
 
