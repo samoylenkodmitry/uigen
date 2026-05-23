@@ -36,7 +36,7 @@ def test_dataset_length_and_item_keys(dataset):
     assert len(dataset) == len(TRAINABLE_EXPORT_FILES)
     sample = dataset[0]
     assert set(sample) == {
-        "skin_id", "file_name",
+        "skin_id", "skin_index", "file_name",
         "target_rgb", "observed_mask", "observed_rgb",
         "mode",
     }
@@ -389,3 +389,44 @@ def test_empty_skin_sources_raises():
             skin_sources={},
             state_families_path=CONFIG,
         )
+
+
+def test_skin_id_to_index_is_sorted(tmp_path):
+    # Same skin source reused under different ids; we only care about ordering.
+    src = tmp_path / "src"
+    shutil.copytree(DEFAULT_SKIN, src)
+    ds = V7CompletionDataset(
+        skin_sources={"zeta": src, "alpha": src, "mu": src},
+        state_families_path=CONFIG,
+    )
+    assert ds.skin_ids == ["alpha", "mu", "zeta"]
+    assert ds.skin_id_to_index == {"alpha": 0, "mu": 1, "zeta": 2}
+
+
+def test_item_exposes_skin_index():
+    ds = V7CompletionDataset(
+        skin_sources={"default": DEFAULT_SKIN},
+        state_families_path=CONFIG,
+    )
+    sample = ds[0]
+    assert "skin_index" in sample
+    assert sample["skin_index"] == ds.skin_id_to_index[sample["skin_id"]]
+
+
+def test_dataloader_collates_skin_index_as_tensor(tmp_path):
+    src = tmp_path / "src"
+    shutil.copytree(DEFAULT_SKIN, src)
+    ds = V7CompletionDataset(
+        skin_sources={"a": src, "b": src},
+        state_families_path=CONFIG,
+    )
+    same_file_indices = [
+        i for i, (_, fn) in enumerate(ds.items) if fn == "MAIN.bmp"
+    ][:2]
+    items = [ds[i] for i in same_file_indices]
+    from torch.utils.data._utils.collate import default_collate
+    batch = default_collate(items)
+    assert "skin_index" in batch
+    assert isinstance(batch["skin_index"], torch.Tensor)
+    assert batch["skin_index"].dtype == torch.long
+    assert list(batch["skin_index"].shape) == [2]

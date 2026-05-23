@@ -45,7 +45,9 @@ def test_runtime_loader_keeps_absolute_kaggle_paths():
     from scripts.runtime_config import load_runtime
     rt = load_runtime(KAGGLE_RUNTIME)
     assert rt.paths["repo_dir"] == Path("/kaggle/working/uigen")
-    assert rt.paths["data_dir"] == Path("/kaggle/input/uigen-data")
+    assert rt.paths["data_dir"] == Path(
+        "/kaggle/input/datasets/dmitriisamoilenko/uigen-data/uigen-data-v7-16skin"
+    )
     assert rt.paths["runs_dir"] == Path("/kaggle/working/runs")
     assert rt.paths["cache_dir"] == Path("/kaggle/working/cache")
 

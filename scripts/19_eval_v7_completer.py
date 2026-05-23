@@ -50,12 +50,19 @@ def load_state_dict(path: Path) -> dict:
 
 def _detect_v7_kwargs(state: dict) -> dict:
     version = int(state["model_version"].reshape(-1)[0].item())
-    if version != 70:
-        raise SystemExit(f"need a V7 completer checkpoint (version 70), got {version}")
-    return {
+    if version not in (70, 71):
+        raise SystemExit(f"need a V7 completer checkpoint (version 70 or 71), got {version}")
+    kwargs = {
         "base_channels": int(state["base_channels_buffer"].reshape(-1)[0].item()),
         "file_embedding_dim": int(state["file_embedding_dim_buffer"].reshape(-1)[0].item()),
     }
+    if "num_skins_buffer" in state:
+        kwargs["num_skins"] = int(state["num_skins_buffer"].reshape(-1)[0].item())
+    if "skin_embedding_dim_buffer" in state:
+        kwargs["skin_embedding_dim"] = int(
+            state["skin_embedding_dim_buffer"].reshape(-1)[0].item()
+        )
+    return kwargs
 
 
 def _sample_metrics(
@@ -132,7 +139,15 @@ def evaluate(
                 target_rgb = batch["target_rgb"].to(device)
                 b = observed_rgb.shape[0]
                 file_id = torch.full((b,), FILE_TO_ID[file_name], dtype=torch.long, device=device)
-                final_rgb = model(observed_rgb, observed_mask, file_id)
+                num_skins = getattr(model, "num_skins", 0)
+                skin_index = batch.get("skin_index")
+                if num_skins > 0 and skin_index is not None:
+                    if not isinstance(skin_index, torch.Tensor):
+                        skin_index = torch.as_tensor(skin_index, dtype=torch.long)
+                    skin_id_tensor = skin_index.to(device=device, dtype=torch.long)
+                    final_rgb = model(observed_rgb, observed_mask, file_id, skin_id=skin_id_tensor)
+                else:
+                    final_rgb = model(observed_rgb, observed_mask, file_id)
                 support = support_masks[file_name].to(device=device, dtype=final_rgb.dtype)
                 mae_by_sample, hit_by_sample, sob_by_sample = _sample_metrics(
                     final_rgb, target_rgb, support,

@@ -173,6 +173,100 @@ def test_trainer_rejects_non_v7_checkpoint_at_eval(tmp_path):
     assert b"V7 completer" in result.stderr or b"V7 completer" in result.stdout
 
 
+def test_trainer_with_skin_embedding_two_skins(tmp_path):
+    """Trainer + eval round-trip with --skin-embedding-dim and two skin sources.
+
+    Verifies: trainer builds with num_skins=2, eval auto-detects num_skins from
+    the checkpoint, per-skin eval entries appear for both ids.
+    """
+    import shutil
+    sib_a = tmp_path / "skin_a"
+    sib_b = tmp_path / "skin_b"
+    shutil.copytree(DEFAULT_SKIN, sib_a)
+    shutil.copytree(DEFAULT_SKIN, sib_b)
+    run = tmp_path / "v7_run_skin"
+    subprocess.run([
+        sys.executable, str(TRAINER),
+        "--state-families", str(CONFIG),
+        "--skin-sources", f"alpha={sib_a},beta={sib_b}",
+        "--batch", "2",
+        "--base-channels", "8",
+        "--file-embedding-dim", "8",
+        "--skin-embedding-dim", "4",
+        "--num-workers", "0",
+        "--checkpoint-every", "1",
+        "--device", "cpu",
+        "--out", str(run),
+        "--steps", "3",
+        "--seed", "11",
+    ], check=True)
+    config = json.loads((run / "config.json").read_text())
+    assert config["num_skins"] == 2
+    assert config["skin_embedding_dim"] == 4
+    assert config["skin_id_to_index"] == {"alpha": 0, "beta": 1}
+    assert config["model_version"] == 71
+
+    eval_json = run / "eval.json"
+    subprocess.run([
+        sys.executable, str(EVAL_SCRIPT),
+        "--state-families", str(CONFIG),
+        "--skin-sources", f"alpha={sib_a},beta={sib_b}",
+        "--checkpoint", str(run / "last.safetensors"),
+        "--batch", "2",
+        "--mask-samples", "1",
+        "--device", "cpu",
+        "--out-json", str(eval_json),
+    ], check=True)
+    result = json.loads(eval_json.read_text())
+    assert set(result["per_skin"]) == {"alpha", "beta"}
+
+
+def test_skin_resume_rejects_mismatched_num_skins(tmp_path):
+    """--resume-from must reject checkpoints whose num_skins disagrees with
+    the new run's dataset size."""
+    import shutil
+    sib_a = tmp_path / "skin_a"
+    sib_b = tmp_path / "skin_b"
+    shutil.copytree(DEFAULT_SKIN, sib_a)
+    shutil.copytree(DEFAULT_SKIN, sib_b)
+    # First run: one skin.
+    run1 = tmp_path / "v7_one"
+    subprocess.run([
+        sys.executable, str(TRAINER),
+        "--state-families", str(CONFIG),
+        "--skin-sources", f"alpha={sib_a}",
+        "--batch", "1",
+        "--base-channels", "8",
+        "--file-embedding-dim", "8",
+        "--skin-embedding-dim", "4",
+        "--num-workers", "0",
+        "--checkpoint-every", "1",
+        "--device", "cpu",
+        "--out", str(run1),
+        "--steps", "1",
+    ], check=True)
+    # Second run: two skins, resuming from the one-skin checkpoint -> reject.
+    run2 = tmp_path / "v7_two_resume"
+    res = subprocess.run([
+        sys.executable, str(TRAINER),
+        "--state-families", str(CONFIG),
+        "--skin-sources", f"alpha={sib_a},beta={sib_b}",
+        "--batch", "1",
+        "--base-channels", "8",
+        "--file-embedding-dim", "8",
+        "--skin-embedding-dim", "4",
+        "--num-workers", "0",
+        "--checkpoint-every", "1",
+        "--device", "cpu",
+        "--out", str(run2),
+        "--steps", "1",
+        "--resume-from", str(run1 / "last.safetensors"),
+    ], capture_output=True)
+    assert res.returncode != 0
+    blob = res.stderr + res.stdout
+    assert b"num_skins" in blob
+
+
 def test_trainer_skin_sources_basename_default(tmp_path):
     """Bare-path skin-sources uses basename as skin id."""
     run = tmp_path / "v7_run"

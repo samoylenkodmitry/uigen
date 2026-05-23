@@ -93,6 +93,112 @@ def test_model_version_buffer_is_70():
     assert int(model.model_version.item()) == 70
 
 
+# ---------- Skin conditioning (Gate B) ----------
+
+def _tiny_with_skins(num_skins: int = 3) -> V7Completer:
+    return V7Completer(
+        base_channels=8, file_embedding_dim=8, frequencies=(1, 2),
+        num_skins=num_skins, skin_embedding_dim=4,
+    )
+
+
+def test_skin_conditioning_changes_version_buffer_to_71():
+    assert int(_tiny_with_skins().model_version.item()) == 71
+
+
+def test_skin_conditioning_records_buffers():
+    m = _tiny_with_skins(num_skins=5)
+    assert int(m.num_skins_buffer.item()) == 5
+    assert int(m.skin_embedding_dim_buffer.item()) == 4
+
+
+def test_skin_id_required_when_num_skins_positive():
+    model = _tiny_with_skins().eval()
+    spec = TRAINABLE_EXPORT_SPECS[0]
+    obs = torch.rand(1, 3, spec.h, spec.w)
+    mask = torch.zeros(1, 1, spec.h, spec.w)
+    file_id = torch.tensor([0], dtype=torch.long)
+    with pytest.raises(ValueError, match="skin_id is required"):
+        model(obs, mask, file_id)
+
+
+def test_same_skin_id_deterministic_output():
+    torch.manual_seed(0)
+    model = _tiny_with_skins().eval()
+    spec = TRAINABLE_EXPORT_SPECS[0]
+    obs = torch.zeros(1, 3, spec.h, spec.w)
+    mask = torch.zeros(1, 1, spec.h, spec.w)
+    file_id = torch.tensor([0], dtype=torch.long)
+    sid = torch.tensor([1], dtype=torch.long)
+    with torch.no_grad():
+        a = model(obs, mask, file_id, skin_id=sid)
+        b = model(obs, mask, file_id, skin_id=sid)
+    assert torch.equal(a, b)
+
+
+def test_different_skin_id_can_change_output():
+    torch.manual_seed(0)
+    model = _tiny_with_skins().eval()
+    spec = TRAINABLE_EXPORT_SPECS[0]
+    # All-hidden input so the generated branch fully drives the output.
+    obs = torch.zeros(1, 3, spec.h, spec.w)
+    mask = torch.zeros(1, 1, spec.h, spec.w)
+    file_id = torch.tensor([0], dtype=torch.long)
+    with torch.no_grad():
+        out0 = model(obs, mask, file_id, skin_id=torch.tensor([0], dtype=torch.long))
+        out1 = model(obs, mask, file_id, skin_id=torch.tensor([1], dtype=torch.long))
+    assert not torch.allclose(out0, out1, atol=1e-6), (
+        "skin embedding had no measurable effect on a zero-input forward pass"
+    )
+
+
+def test_skin_checkpoint_roundtrip(tmp_path):
+    from safetensors.torch import load_file, save_file
+
+    torch.manual_seed(123)
+    model = _tiny_with_skins(num_skins=4).eval()
+    spec = TRAINABLE_EXPORT_SPECS[6]
+    obs = torch.rand(1, 3, spec.h, spec.w)
+    mask = torch.ones(1, 1, spec.h, spec.w) * 0.5  # mixed observed
+    file_id = torch.tensor([6], dtype=torch.long)
+    sid = torch.tensor([2], dtype=torch.long)
+    with torch.no_grad():
+        out_a = model(obs, mask, file_id, skin_id=sid)
+    path = tmp_path / "v7_skin.safetensors"
+    save_file({k: v.detach().clone() for k, v in model.state_dict().items()}, str(path))
+    loaded = load_file(str(path))
+    # Buffers must carry forward.
+    assert int(loaded["num_skins_buffer"].item()) == 4
+    assert int(loaded["skin_embedding_dim_buffer"].item()) == 4
+    assert int(loaded["model_version"].item()) == 71
+    fresh = _tiny_with_skins(num_skins=4).eval()
+    fresh.load_state_dict(loaded)
+    with torch.no_grad():
+        out_b = fresh(obs, mask, file_id, skin_id=sid)
+    assert torch.allclose(out_a, out_b, atol=1e-6)
+
+
+def test_no_skin_path_still_works():
+    """num_skins=0 keeps the old forward signature working."""
+    model = _tiny().eval()
+    assert model.skin_embedding is None
+    assert int(model.num_skins_buffer.item()) == 0
+    assert int(model.skin_embedding_dim_buffer.item()) == 0
+    spec = TRAINABLE_EXPORT_SPECS[0]
+    obs = torch.rand(1, 3, spec.h, spec.w)
+    mask = torch.zeros(1, 1, spec.h, spec.w)
+    file_id = torch.tensor([0], dtype=torch.long)
+    # No skin_id passed.
+    with torch.no_grad():
+        out = model(obs, mask, file_id)
+    assert out.shape == (1, 3, spec.h, spec.w)
+
+
+def test_skin_dim_zero_with_num_skins_positive_rejected():
+    with pytest.raises(ValueError, match="skin_embedding_dim"):
+        V7Completer(num_skins=3, skin_embedding_dim=0)
+
+
 def test_hard_mask_passthrough_is_exact_before_training():
     """When observed_mask == 1 everywhere, final_rgb must equal observed_rgb
     pixel-for-pixel, without any training, regardless of model parameters."""

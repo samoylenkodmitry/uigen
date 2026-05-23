@@ -98,6 +98,13 @@ class V7CompletionDataset(Dataset):
         if not skin_sources:
             raise ValueError("V7CompletionDataset requires at least one skin source")
         self.skin_ids: list[str] = sorted(skin_sources.keys())
+        # Stable mapping skin_id -> int index. Sorted order is part of the
+        # dataset's public contract so a checkpoint trained with skin
+        # embedding can be re-evaluated against the same skin set without
+        # carrying the mapping separately.
+        self.skin_id_to_index: dict[str, int] = {
+            sid: idx for idx, sid in enumerate(self.skin_ids)
+        }
         self.targets: dict[str, dict[str, torch.Tensor]] = {
             skin_id: _load_skin_targets(Path(skin_sources[skin_id]))
             for skin_id in self.skin_ids
@@ -183,6 +190,7 @@ class V7CompletionDataset(Dataset):
         observed_rgb = target_rgb * mask
         return {
             "skin_id": skin_id,
+            "skin_index": self.skin_id_to_index[skin_id],
             "file_name": file_name,
             "target_rgb": target_rgb,
             "observed_mask": mask,

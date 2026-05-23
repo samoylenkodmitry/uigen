@@ -94,6 +94,12 @@ class V7Completer(nn.Module):
         file_embedding_dim: embedding width for the per-file conditioning
             channel. Broadcast over all spatial positions.
         frequencies: Fourier frequencies for spatial coord conditioning.
+        num_skins: size of the skin embedding table. When 0, no skin
+            conditioning is added (Gate-A v70 layout). When >0 the model
+            expects forward(..., skin_id=...) and broadcasts the skin
+            embedding as channels in parallel with the file embedding.
+            Required for multi-skin Phase 0 training (Gate B).
+        skin_embedding_dim: width of the skin embedding when num_skins>0.
     """
 
     def __init__(
@@ -101,13 +107,19 @@ class V7Completer(nn.Module):
         base_channels: int = 24,
         file_embedding_dim: int = 32,
         frequencies: tuple[int, ...] = DEFAULT_FREQUENCIES,
+        num_skins: int = 0,
+        skin_embedding_dim: int = 0,
     ):
         super().__init__()
         self.base_channels = base_channels
         self.file_embedding_dim = file_embedding_dim
         self.frequencies = tuple(int(f) for f in frequencies)
+        self.num_skins = int(num_skins)
+        self.skin_embedding_dim = int(skin_embedding_dim) if self.num_skins > 0 else 0
+        if self.num_skins > 0 and self.skin_embedding_dim <= 0:
+            raise ValueError("skin_embedding_dim must be >0 when num_skins>0")
         coord_ch = _coord_channels(self.frequencies)
-        in_ch = 3 + 1 + file_embedding_dim + coord_ch
+        in_ch = 3 + 1 + file_embedding_dim + self.skin_embedding_dim + coord_ch
 
         c1 = base_channels
         c2 = base_channels * 2
@@ -117,6 +129,10 @@ class V7Completer(nn.Module):
         self.file_embedding = nn.Embedding(
             len(TRAINABLE_EXPORT_SPECS), file_embedding_dim
         )
+        if self.num_skins > 0:
+            self.skin_embedding = nn.Embedding(self.num_skins, self.skin_embedding_dim)
+        else:
+            self.skin_embedding = None
 
         # Encoder: stem at full resolution, then 3 stride-2 down blocks.
         self.stem = _conv_block(in_ch, c1)
@@ -131,31 +147,56 @@ class V7Completer(nn.Module):
         self.fuse1 = _conv_block(c2 + c1, c1)
         self.out_proj = nn.Conv2d(c1, 3, kernel_size=1)
 
-        self.register_buffer("model_version", torch.tensor([70], dtype=torch.int32))
+        # model_version stays at 70 when there is no skin conditioning, so
+        # Gate-A checkpoints continue to load with this code unchanged.
+        # Adding skin conditioning bumps to 71 — every v71 checkpoint also
+        # records num_skins and skin_embedding_dim buffers.
+        version = 71 if self.num_skins > 0 else 70
+        self.register_buffer("model_version", torch.tensor([version], dtype=torch.int32))
         self.register_buffer("base_channels_buffer", torch.tensor([base_channels], dtype=torch.int32))
         self.register_buffer("file_embedding_dim_buffer", torch.tensor([file_embedding_dim], dtype=torch.int32))
         self.register_buffer(
             "frequencies_buffer", torch.tensor(list(self.frequencies), dtype=torch.int32)
         )
+        self.register_buffer("num_skins_buffer", torch.tensor([self.num_skins], dtype=torch.int32))
+        self.register_buffer(
+            "skin_embedding_dim_buffer",
+            torch.tensor([self.skin_embedding_dim], dtype=torch.int32),
+        )
 
     def _build_conditioning(
-        self, observed_rgb: torch.Tensor, observed_mask: torch.Tensor, file_id: torch.Tensor,
+        self,
+        observed_rgb: torch.Tensor,
+        observed_mask: torch.Tensor,
+        file_id: torch.Tensor,
+        skin_id: torch.Tensor | None,
     ) -> torch.Tensor:
         b, _, h, w = observed_rgb.shape
         emb = self.file_embedding(file_id)  # [B, F]
         emb_map = emb.view(b, -1, 1, 1).expand(b, -1, h, w)
+        channels = [observed_rgb, observed_mask, emb_map]
+        if self.skin_embedding is not None:
+            if skin_id is None:
+                raise ValueError(
+                    "skin_id is required when the model was built with num_skins>0"
+                )
+            s_emb = self.skin_embedding(skin_id)  # [B, S]
+            s_map = s_emb.view(b, -1, 1, 1).expand(b, -1, h, w)
+            channels.append(s_map)
         coords = _fourier_coords(
             h, w, self.frequencies,
             device=observed_rgb.device, dtype=observed_rgb.dtype,
         )
         coords = coords.unsqueeze(0).expand(b, -1, -1, -1)
-        return torch.cat([observed_rgb, observed_mask, emb_map, coords], dim=1)
+        channels.append(coords)
+        return torch.cat(channels, dim=1)
 
     def forward(
         self,
         observed_rgb: torch.Tensor,
         observed_mask: torch.Tensor,
         file_id: torch.Tensor,
+        skin_id: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if observed_rgb.dim() != 4 or observed_rgb.shape[1] != 3:
             raise ValueError(f"observed_rgb must be [B, 3, H, W], got {tuple(observed_rgb.shape)}")
@@ -164,7 +205,7 @@ class V7Completer(nn.Module):
                 f"observed_mask must be [B, 1, H, W], got {tuple(observed_mask.shape)} "
                 f"vs view {tuple(observed_rgb.shape)}"
             )
-        x = self._build_conditioning(observed_rgb, observed_mask, file_id)
+        x = self._build_conditioning(observed_rgb, observed_mask, file_id, skin_id)
         # Encoder.
         f1 = self.stem(x)
         f2 = self.down1(f1)

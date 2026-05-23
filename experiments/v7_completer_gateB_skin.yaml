@@ -1,0 +1,46 @@
+# V7 Phase 0 / Gate B — 16-skin asset completion WITH skin conditioning.
+#
+# Differs from v7_completer_gateB.yaml only by adding --skin-embedding-dim 64.
+# Diagnosis of the no-skin Gate B run: the model conditioned only on
+# (file_id, coords, observed pixels) and produced an average-skin prior for
+# slider strips, where the observed evidence is sparse. With an explicit
+# skin embedding the per-(skin, file) memorization target becomes tractable.
+#
+# Per the V7 plan: skin embedding is a Phase 0 training crutch — at deployment
+# the unified model will replace skin_id with a learned style vector derived
+# from the input render. For Gate B we just test whether the completer has
+# enough capacity to memorize 14 skins when identity is supplied.
+
+name: v7_completer_gateB_skin
+trainer: train_v7_completer.py
+
+# Distinct run dir so the no-skin baseline is not overwritten.
+out: "@runs/v7_completer_gateB_skin_16skin"
+
+data:
+  state_families: configs/state_families_classic.yaml
+  skin_sources: "@data/data_v7_16skin_completion"
+
+args:
+  state-families: configs/state_families_classic.yaml
+  steps: 80000
+  batch: 1
+  lr: 1.0e-3
+  weight-decay: 1.0e-4
+  base-channels: 48
+  file-embedding-dim: 32
+  skin-embedding-dim: 64
+  sampling-mode: weighted
+  file-sampling-weights: configs/v7_file_weights_continuation.yaml
+  sobel-weight: 0.25
+  checkpoint-every: 5000
+  snapshot-every: 5000
+  seed: 0
+
+notes: |
+  Gate B with skin conditioning. From scratch (no --resume-from).
+  Acceptance:
+    aggregate supported_mae < 0.015
+    aggregate hit5          > 0.90
+    small-asset per-file hit5 > 0.80 for VOLUME / BALANCE / MONOSTER /
+      PLAYPAUS / POSBAR (the no-skin failures).

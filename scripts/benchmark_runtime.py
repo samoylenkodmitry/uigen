@@ -93,6 +93,7 @@ def main() -> int:
 
     base_channels = int(_extract_arg(argv, "--base-channels", 24))
     file_embedding_dim = int(_extract_arg(argv, "--file-embedding-dim", 32))
+    skin_embedding_dim = int(_extract_arg(argv, "--skin-embedding-dim", 0))
     sobel_weight = float(_extract_arg(argv, "--sobel-weight", 0.0))
     sampling_mode = _extract_arg(argv, "--sampling-mode", "epoch")
     full_steps = int(_extract_arg(argv, "--steps", 1))
@@ -132,8 +133,10 @@ def main() -> int:
     loader = DataLoader(dataset, batch_sampler=sampler, num_workers=0)
     support_masks = load_support_masks()
 
+    num_skins = len(dataset.skin_ids) if skin_embedding_dim > 0 else 0
     model = V7Completer(
         base_channels=base_channels, file_embedding_dim=file_embedding_dim,
+        num_skins=num_skins, skin_embedding_dim=skin_embedding_dim,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     use_amp = runtime.amp and device.type == "cuda"
@@ -154,9 +157,15 @@ def main() -> int:
         target = batch["target_rgb"].to(device, non_blocking=True)
         file_name = batch["file_name"][0] if isinstance(batch["file_name"], list) else batch["file_name"]
         file_id = torch.full((view.shape[0],), FILE_TO_ID[file_name], dtype=torch.long, device=device)
+        skin_id_tensor = None
+        if model.num_skins > 0:
+            skin_idx = batch.get("skin_index")
+            if not isinstance(skin_idx, torch.Tensor):
+                skin_idx = torch.as_tensor(skin_idx, dtype=torch.long)
+            skin_id_tensor = skin_idx.to(device=device, dtype=torch.long)
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=use_amp):
-            final = model(view, mask_t, file_id)
+            final = model(view, mask_t, file_id, skin_id=skin_id_tensor)
             support = support_masks[file_name].to(device=device, dtype=final.dtype)
             loss = support_masked_l1_loss(final, target, support)
             if sobel_weight > 0:

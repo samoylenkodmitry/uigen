@@ -112,7 +112,17 @@ def compute_step_loss(
     file_id = torch.full(
         (batch_size,), FILE_TO_ID[file_name], dtype=torch.long, device=device,
     )
-    final_rgb = model(observed_rgb, observed_mask, file_id)
+    skin_id_tensor: torch.Tensor | None = None
+    if model.num_skins > 0:
+        skin_index = batch.get("skin_index")
+        if skin_index is None:
+            raise RuntimeError(
+                "model has skin conditioning but batch lacks 'skin_index'"
+            )
+        if not isinstance(skin_index, torch.Tensor):
+            skin_index = torch.as_tensor(skin_index, dtype=torch.long)
+        skin_id_tensor = skin_index.to(device=device, dtype=torch.long)
+    final_rgb = model(observed_rgb, observed_mask, file_id, skin_id=skin_id_tensor)
     support = support_masks[file_name].to(device=device, dtype=final_rgb.dtype)
     l1 = support_masked_l1_loss(final_rgb, target_rgb, support)
     out = {"l1": l1.detach()}
@@ -143,6 +153,12 @@ def main() -> int:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--base-channels", type=int, default=24)
     parser.add_argument("--file-embedding-dim", type=int, default=32)
+    parser.add_argument("--skin-embedding-dim", type=int, default=0,
+                        help="Width of the per-skin embedding. 0 disables skin "
+                             "conditioning (Gate A behavior). >0 builds the "
+                             "model with num_skins=len(skin_sources) and "
+                             "passes skin_index from the batch in forward(). "
+                             "Required for multi-skin Gate B training.")
     parser.add_argument("--checkpoint-every", type=int, default=500)
     parser.add_argument("--snapshot-every", type=int, default=0)
     parser.add_argument("--save-every", type=int, default=None,
@@ -243,17 +259,34 @@ def main() -> int:
     )
     support_masks = load_support_masks()
 
+    num_skins = len(dataset.skin_ids) if args.skin_embedding_dim > 0 else 0
     model = V7Completer(
         base_channels=args.base_channels,
         file_embedding_dim=args.file_embedding_dim,
+        num_skins=num_skins,
+        skin_embedding_dim=args.skin_embedding_dim,
     ).to(device)
 
     if args.resume_from:
         from safetensors.torch import load_file
         resume_state = load_file(str(Path(args.resume_from)))
         version = int(resume_state.get("model_version", torch.tensor([0])).reshape(-1)[0].item())
-        if version != 70:
-            raise SystemExit(f"--resume-from expects V7 completer (version 70), got {version}")
+        if version not in (70, 71):
+            raise SystemExit(f"--resume-from expects V7 completer (version 70 or 71), got {version}")
+        # Validate skin conditioning shape matches between the source and
+        # destination model, otherwise the embedding table sizes disagree
+        # and load_state_dict would either crash or silently truncate.
+        src_num_skins = int(
+            resume_state.get("num_skins_buffer", torch.tensor([0])).reshape(-1)[0].item()
+        )
+        src_skin_dim = int(
+            resume_state.get("skin_embedding_dim_buffer", torch.tensor([0])).reshape(-1)[0].item()
+        )
+        if src_num_skins != num_skins or src_skin_dim != model.skin_embedding_dim:
+            raise SystemExit(
+                f"--resume-from checkpoint has num_skins={src_num_skins} skin_dim={src_skin_dim}, "
+                f"but this run expects num_skins={num_skins} skin_dim={model.skin_embedding_dim}"
+            )
         missing, unexpected = model.load_state_dict(resume_state, strict=False)
         if missing:
             raise SystemExit(f"--resume-from missing keys: {sorted(missing)[:5]}...")
@@ -287,7 +320,10 @@ def main() -> int:
         pass
 
     config = {
-        "model_version": 70,
+        "model_version": 71 if num_skins > 0 else 70,
+        "num_skins": num_skins,
+        "skin_embedding_dim": model.skin_embedding_dim,
+        "skin_id_to_index": dict(dataset.skin_id_to_index),
         "args": vars(args),
         "skin_sources": skin_sources,
         "dataset_size": len(dataset),
