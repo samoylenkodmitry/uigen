@@ -1,0 +1,78 @@
+# V7 Phase 0 / Gate B-skin: state_family-focused continuation from 75k.
+#
+# Diagnosis: per-mode eval on the 75k Gate B-skin continuation checkpoint
+# showed training loss had dropped 74% but eval mae only 1%. Reason: under
+# the default mask mix (provenance 0.40 / state_family 0.35 / random_rect
+# 0.20 / whole_file 0.05) the optimizer learned random_rect (mae 0.011),
+# passthrough (mae 0.000), and even whole_file already — but state_family,
+# the hard mode that drives the gate, stayed at mae 0.055 / hit5 0.76.
+# Aggregate eval is dominated by state_family because provenance is N/A
+# for this dataset (no provenance pools) and gets redistributed.
+#
+# Recipe (vs the 75k continuation source):
+#   - mask weights:
+#       provenance     0.50  (gets redistributed to 0 — no pool)
+#       state_family   0.35  -> effective ~0.70 post-normalization
+#       random_rect    0.15  -> effective ~0.30
+#       whole_file     0.00  (was 0.05) — easy mode, drop it
+#       passthrough    0.00  (was 0.00) — kept off
+#   - file weights: BALANCE / VOLUME / POSBAR / PLAYPAUS doubled, MONOSTER
+#     bumped (configs/v7_file_weights_state_family_focus.yaml)
+#   - steps              80000 -> 30000  (focused continuation)
+#   - resume-from        75k last.safetensors
+#   - lr                 5e-4  (unchanged)
+#   - c48                unchanged
+#   - skin_embedding_dim 64    unchanged
+#   - sobel_weight       0.25  unchanged
+#   - batch              14    unchanged
+#   - within-file-replacement: false unchanged
+#   - progress-every     200   so we never run blind again
+
+name: v7_completer_gateB_skin_statefamily
+trainer: train_v7_completer.py
+
+out: "@runs/v7_completer_gateB_skin_statefamily"
+
+data:
+  state_families: configs/state_families_classic.yaml
+  skin_sources: "@data/data_v7_16skin_completion"
+
+args:
+  state-families: configs/state_families_classic.yaml
+  steps: 30000
+  batch: 14
+  within-file-replacement: "false"
+  lr: 5.0e-4
+  weight-decay: 1.0e-4
+  base-channels: 48
+  file-embedding-dim: 32
+  skin-embedding-dim: 64
+  sampling-mode: weighted
+  file-sampling-weights: configs/v7_file_weights_state_family_focus.yaml
+  sobel-weight: 0.25
+  # Hard-mode-only mask mix; whole_file and passthrough zeroed.
+  mask-provenance: 0.50
+  mask-state-family: 0.35
+  mask-random-rect: 0.15
+  mask-whole-file: 0.0
+  mask-passthrough: 0.0
+  resume-from: /kaggle/input/datasets/dmitriisamoilenko/uigen-gatebskin-cont-75k-ckpt/last.safetensors
+  checkpoint-every: 2500
+  snapshot-every: 5000
+  progress-every: 200
+  seed: 2
+
+notes: |
+  30k focused continuation. Acceptance: under STATE_FAMILY-ONLY eval mode,
+    aggregate supported_mae < 0.025
+    aggregate hit5          > 0.85
+  and on each of BALANCE / VOLUME / POSBAR / PLAYPAUS / MONOSTER:
+    hit5 > 0.80 in state_family mode.
+  Decision tree if not met:
+    state_family mae stalls ~0.04 / hit5 ~0.80   ->  c64 is justified.
+    only strip assets weak                         ->  more file-weight or
+                                                       per-file curriculum.
+    state_family improves but plateaus on a few
+    skins (tvxq, rancid, aguileramp)               ->  skin-conditional
+                                                       embedding capacity is
+                                                       under-allocated.

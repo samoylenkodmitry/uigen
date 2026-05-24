@@ -1,0 +1,25 @@
+# V7 file weights for the state_family-focused continuation.
+#
+# Doubles the four failing slider/button strips identified by per-mode eval
+# of the 75k Gate B-skin continuation checkpoint (state_family mode is the
+# eval bottleneck; random_rect is already at mae 0.01 / hit5 0.96).
+#
+#   BALANCE  4 -> 8   (state_family mae 0.131, hit5 0.46)
+#   VOLUME   5 -> 10  (state_family mae 0.119, hit5 0.34)
+#   POSBAR   1 -> 2   (state_family mae 0.052, hit5 0.62)
+#   PLAYPAUS 2 -> 4   (state_family mae 0.059, hit5 0.62)
+#   MONOSTER 8 -> 10  (small bump, still weak per skin)
+#
+# Other files kept identical to v7_file_weights_continuation.yaml.
+
+EQMAIN.bmp:    8
+MAIN.bmp:      4
+TITLEBAR.bmp:  4
+SHUFREP.bmp:   4
+PLEDIT.bmp:    4
+CBUTTONS.bmp:  6
+VOLUME.bmp:   10
+BALANCE.bmp:   8
+MONOSTER.bmp: 10
+POSBAR.bmp:    2
+PLAYPAUS.bmp:  4
