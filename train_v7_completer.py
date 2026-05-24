@@ -35,7 +35,12 @@ from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
 from atlas_ai.support_mask import load_support_masks
 from atlas_ai.v7_batching import SameFileBatchSampler, WeightedSameFileBatchSampler
 from atlas_ai.v7_masks import V7MaskWeights
-from models.losses_v7 import support_masked_l1_loss, support_masked_sobel_mae
+from models.losses_v7 import (
+    support_masked_l1_loss,
+    support_masked_l1_per_item,
+    support_masked_sobel_mae,
+    support_masked_sobel_mae_per_item,
+)
 from models.v7_completer import V7Completer
 
 
@@ -125,15 +130,20 @@ def compute_step_loss(
     final_rgb = model(observed_rgb, observed_mask, file_id, skin_id=skin_id_tensor)
     support = support_masks[file_name].to(device=device, dtype=final_rgb.dtype)
     l1 = support_masked_l1_loss(final_rgb, target_rgb, support)
+    l1_per_item = support_masked_l1_per_item(final_rgb, target_rgb, support)
     out = {"l1": l1.detach()}
     if sobel_weight > 0.0:
         sobel = support_masked_sobel_mae(final_rgb, target_rgb, support)
+        sobel_per_item = support_masked_sobel_mae_per_item(final_rgb, target_rgb, support)
         total = l1 + sobel_weight * sobel
+        total_per_item = l1_per_item + sobel_weight * sobel_per_item
         out["sobel"] = sobel.detach()
     else:
         total = l1
+        total_per_item = l1_per_item
         out["sobel"] = torch.zeros((), device=device)
     out["total"] = total
+    out["total_per_item"] = total_per_item.detach()
     return out
 
 
@@ -360,6 +370,39 @@ def main() -> int:
     recent_losses: list[float] = []
     recent_window = max(progress_every, 1)
     last_progress_time = start_time
+    # Running per-(mode|file|skin) sums and counts. Reset after each progress
+    # line so each emitted block describes the *window* since the previous
+    # print. Single skin runs may have one entry; that's fine.
+    skin_index_to_id = {idx: sid for sid, idx in dataset.skin_id_to_index.items()}
+
+    def _new_bucket() -> dict[str, list[float]]:
+        return {"sum": [0.0], "n": [0]}
+
+    mode_buckets: dict[str, dict[str, list[float]]] = {}
+    file_buckets: dict[str, dict[str, list[float]]] = {}
+    skin_buckets: dict[str, dict[str, list[float]]] = {}
+
+    def _accumulate(b: dict, key: str, loss: float) -> None:
+        slot = b.setdefault(key, _new_bucket())
+        slot["sum"][0] += loss
+        slot["n"][0] += 1
+
+    def _drain(b: dict) -> dict[str, tuple[float, int]]:
+        out_means: dict[str, tuple[float, int]] = {}
+        for k, slot in b.items():
+            n = slot["n"][0]
+            if n > 0:
+                out_means[k] = (slot["sum"][0] / n, n)
+        b.clear()
+        return out_means
+
+    def _fmt_breakdown(label: str, means: dict[str, tuple[float, int]]) -> str:
+        if not means:
+            return f"  {label}: (no data)"
+        items = sorted(means.items(), key=lambda kv: -kv[1][0])
+        parts = [f"{k}={v:.4f}(n{n})" for k, (v, n) in items]
+        return f"  {label}: " + " ".join(parts)
+
     print(f"training start: target steps={args.steps} batch={args.batch} "
           f"progress_every={progress_every}", flush=True)
     with metrics_path.open("w", encoding="utf-8") as metrics_file:
@@ -389,10 +432,31 @@ def main() -> int:
                 else:
                     losses["total"].backward()
                     optimizer.step()
+                per_item_total = losses.pop("total_per_item").to("cpu")
                 logged = {k: float(v.detach().cpu()) for k, v in losses.items()}
                 logged["step"] = step
                 logged["epoch"] = epoch
                 logged["file_name"] = batch["file_name"][0] if isinstance(batch["file_name"], list) else batch["file_name"]
+                # Bucket per-item losses by mode / file / skin. Same-file
+                # batches mean every item shares file_name (already in
+                # logged), but mode and skin vary per item.
+                modes_in_batch = batch.get("mode", [])
+                if not isinstance(modes_in_batch, (list, tuple)):
+                    modes_in_batch = [modes_in_batch]
+                skin_idx_batch = batch.get("skin_index")
+                if isinstance(skin_idx_batch, torch.Tensor):
+                    skin_idx_list = skin_idx_batch.detach().cpu().tolist()
+                else:
+                    skin_idx_list = list(skin_idx_batch) if skin_idx_batch is not None else []
+                bs = per_item_total.shape[0]
+                for i in range(bs):
+                    loss_i = float(per_item_total[i].item())
+                    mode_i = str(modes_in_batch[i]) if i < len(modes_in_batch) else "?"
+                    _accumulate(mode_buckets, mode_i, loss_i)
+                    _accumulate(file_buckets, logged["file_name"], loss_i)
+                    if i < len(skin_idx_list):
+                        sid = skin_index_to_id.get(int(skin_idx_list[i]), f"idx{int(skin_idx_list[i])}")
+                        _accumulate(skin_buckets, sid, loss_i)
                 metrics_file.write(json.dumps(logged) + "\n")
                 if logged["total"] < best:
                     best = logged["total"]
@@ -418,6 +482,9 @@ def main() -> int:
                     mean_recent = sum(recent_losses) / max(len(recent_losses), 1)
                     pct = 100.0 * step / max(args.steps, 1)
                     elapsed_min = (now - start_time) / 60.0
+                    mode_means = _drain(mode_buckets)
+                    file_means = _drain(file_buckets)
+                    skin_means = _drain(skin_buckets)
                     print(
                         f"[step {step:>6d}/{args.steps}  {pct:5.1f}%]  "
                         f"loss(mean{len(recent_losses):>4d})={mean_recent:.4f}  "
@@ -426,6 +493,9 @@ def main() -> int:
                         f"elapsed={elapsed_min:6.1f}min  ETA={eta_min:6.1f}min",
                         flush=True,
                     )
+                    print(_fmt_breakdown("by_mode", mode_means), flush=True)
+                    print(_fmt_breakdown("by_file", file_means), flush=True)
+                    print(_fmt_breakdown("by_skin", skin_means), flush=True)
                     last_progress_time = now
             if stopped_by_time:
                 break

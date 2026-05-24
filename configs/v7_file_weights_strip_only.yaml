@@ -1,0 +1,26 @@
+# V7 strip-only file weights for the Gate B-strip probe.
+#
+# Targets the exact failing subset surfaced by c64 80k state_family eval:
+#   POSBAR   mae 0.087  hit5 0.60
+#   BALANCE  mae 0.083  hit5 0.68
+#   MONOSTER mae 0.075  hit5 0.64
+#   PLAYPAUS mae 0.069  hit5 0.69
+#   VOLUME   mae 0.066  hit5 0.75
+# Plus CBUTTONS as a calibration file (mae 0.019 / hit5 0.92 — already easy,
+# included so we can tell whether strip-only is bottlenecking on the strip
+# files specifically rather than on some shared training dynamic).
+#
+# Files absent from this mapping (weight 0) are skipped entirely by the
+# WeightedSameFileBatchSampler — see atlas_ai/v7_batching.py L147. The
+# dataset still loads them so eval can score the full file set after
+# training, but the optimizer only ever sees strip / CBUTTONS batches.
+#
+# Per-file weights here are roughly proportional to remaining mae mass so
+# the gradient budget is spent on the hardest files first.
+
+BALANCE.bmp:  4
+VOLUME.bmp:   4
+POSBAR.bmp:   4
+PLAYPAUS.bmp: 3
+MONOSTER.bmp: 3
+CBUTTONS.bmp: 1

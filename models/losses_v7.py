@@ -108,8 +108,59 @@ def support_masked_sobel_mae(
     return diff.sum() / denom
 
 
+def support_masked_l1_per_item(
+    final_rgb: torch.Tensor,
+    target_rgb: torch.Tensor,
+    support_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Per-item supported-pixel L1, returned as a [B] tensor.
+
+    Mirrors `support_masked_l1_loss` but reduces only across (C, H, W)
+    so the trainer can bucket batch losses by mode / file / skin.
+    """
+    mask = support_mask
+    if mask.dim() == 2:
+        mask = mask.unsqueeze(0).unsqueeze(0)
+    elif mask.dim() == 3:
+        mask = mask.unsqueeze(0)
+    mask3 = mask.expand_as(final_rgb).to(final_rgb.dtype)
+    diff = (final_rgb - target_rgb).abs() * mask3
+    per_item_num = diff.flatten(1).sum(dim=1)
+    per_item_den = mask3.flatten(1).sum(dim=1).clamp_min(1.0)
+    return per_item_num / per_item_den
+
+
+def support_masked_sobel_mae_per_item(
+    final_rgb: torch.Tensor,
+    target_rgb: torch.Tensor,
+    support_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Per-item supported-pixel Sobel-edge MAE, returned as a [B] tensor."""
+    kx, ky = _sobel_kernels(final_rgb.device, final_rgb.dtype)
+    weight_x = kx.view(1, 1, 3, 3).repeat(3, 1, 1, 1)
+    weight_y = ky.view(1, 1, 3, 3).repeat(3, 1, 1, 1)
+    pred_x = F.conv2d(final_rgb, weight_x, padding=1, groups=3)
+    pred_y = F.conv2d(final_rgb, weight_y, padding=1, groups=3)
+    tgt_x = F.conv2d(target_rgb, weight_x, padding=1, groups=3)
+    tgt_y = F.conv2d(target_rgb, weight_y, padding=1, groups=3)
+    pred_mag = (pred_x.pow(2) + pred_y.pow(2)).clamp_min(1e-12).sqrt()
+    tgt_mag = (tgt_x.pow(2) + tgt_y.pow(2)).clamp_min(1e-12).sqrt()
+    mask = support_mask
+    if mask.dim() == 2:
+        mask = mask.unsqueeze(0).unsqueeze(0)
+    elif mask.dim() == 3:
+        mask = mask.unsqueeze(0)
+    mask3 = mask.expand_as(pred_mag).to(pred_mag.dtype)
+    diff = (pred_mag - tgt_mag).abs() * mask3
+    per_item_num = diff.flatten(1).sum(dim=1)
+    per_item_den = mask3.flatten(1).sum(dim=1).clamp_min(1.0)
+    return per_item_num / per_item_den
+
+
 __all__ = [
     "support_masked_l1_loss",
     "support_masked_hit5",
     "support_masked_sobel_mae",
+    "support_masked_l1_per_item",
+    "support_masked_sobel_mae_per_item",
 ]
