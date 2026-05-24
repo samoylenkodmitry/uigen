@@ -113,10 +113,134 @@ for phase_label, yaml_path in PHASES:
         "--dry-run",
     ], cwd=REPO, env=env_for_make))
 
+# ----- GUARDRAIL: pre-launch verification --------------------------------
+# Print and validate the effective per-phase recipe BEFORE any training
+# starts. Fail loud if the file probabilities or mask weights don't match
+# the planned curriculum — easier to spot a yaml typo here than at hour 4.
+print("\n=== GUARDRAIL: pre-launch verification ===", flush=True)
+import yaml as _yaml
+sys.path.insert(0, str(REPO))
+from train_v7_completer import build_file_weights
+
+EXPECTED_RUN_DIRS = {
+    "phaseA": "gateB_curriculum_phaseA",
+    "phaseB": "gateB_curriculum_phaseB",
+    "phaseC": "gateB_curriculum_phaseC",
+}
+EXPECTED_MASK = {
+    "phaseA": {"state_family": 1.0, "random_rect": 0.0,
+               "provenance": 0.0, "whole_file": 0.0, "passthrough": 0.0},
+    "phaseB": {"state_family": 1.0, "random_rect": 0.0,
+               "provenance": 0.0, "whole_file": 0.0, "passthrough": 0.0},
+    "phaseC": {"state_family": 0.60, "random_rect": 0.30,
+               "provenance": 0.10, "whole_file": 0.0, "passthrough": 0.0},
+}
+
+ALL_FILES = ("MAIN.bmp", "TITLEBAR.bmp", "PLEDIT.bmp", "EQMAIN.bmp",
+             "CBUTTONS.bmp", "SHUFREP.bmp", "POSBAR.bmp", "PLAYPAUS.bmp",
+             "MONOSTER.bmp", "BALANCE.bmp", "VOLUME.bmp")
+
+
+def _normalize(weights: dict) -> dict[str, float]:
+    total = sum(w for w in weights.values() if w > 0)
+    if total <= 0:
+        return {k: 0.0 for k in weights}
+    return {k: (w / total if w > 0 else 0.0) for k, w in weights.items()}
+
+
+guardrail_violations: list[str] = []
+
+for phase_label, yaml_path in PHASES:
+    spec = _yaml.safe_load((REPO / yaml_path).read_text(encoding="utf-8"))
+    args = spec.get("args") or {}
+    out = spec.get("out", "")
+    print(f"\n-- {phase_label} ({yaml_path}) --", flush=True)
+    print(f"  out: {out}", flush=True)
+    print(f"  steps: {args.get('steps')}  batch: {args.get('batch')}  "
+          f"lr: {args.get('lr')}", flush=True)
+    print(f"  resume-from: {args.get('resume-from', '(scratch)')}", flush=True)
+
+    # Run dir check.
+    exp_dir = EXPECTED_RUN_DIRS[phase_label]
+    if exp_dir not in out:
+        guardrail_violations.append(
+            f"{phase_label} out={out!r} does not contain expected dir {exp_dir!r}"
+        )
+
+    # Mask weights check.
+    mask_actual = {
+        "state_family": float(args.get("mask-state-family", 0)),
+        "random_rect":  float(args.get("mask-random-rect", 0)),
+        "provenance":   float(args.get("mask-provenance", 0)),
+        "whole_file":   float(args.get("mask-whole-file", 0)),
+        "passthrough":  float(args.get("mask-passthrough", 0)),
+    }
+    print(f"  mask weights: {mask_actual}", flush=True)
+    exp_mask = EXPECTED_MASK[phase_label]
+    for k, v in exp_mask.items():
+        if abs(mask_actual[k] - v) > 1e-6:
+            guardrail_violations.append(
+                f"{phase_label} mask {k}: expected {v}, got {mask_actual[k]}"
+            )
+
+    # File weights check (post-normalization, replace mode).
+    weights_yaml_rel = args.get("file-sampling-weights")
+    weights_mode = args.get("file-sampling-weights-mode", "merge")
+    print(f"  file-sampling-weights: {weights_yaml_rel}  mode: {weights_mode}", flush=True)
+    if weights_mode != "replace":
+        guardrail_violations.append(
+            f"{phase_label} file-sampling-weights-mode={weights_mode}, expected 'replace'"
+        )
+    raw = build_file_weights(REPO / weights_yaml_rel, mode=weights_mode)
+    norm = _normalize(raw)
+    print(f"  effective file probabilities (post-normalization):", flush=True)
+    for fn in sorted(raw, key=lambda k: -raw[k]):
+        print(f"    {fn:20s} raw={raw[fn]:.3f}  prob={norm[fn]:.4f}", flush=True)
+
+    # Every file with weight 0 in replace mode would be dropped. The whole
+    # *point* of this curriculum is that no file regresses, so every file
+    # must be present with weight > 0 in every phase.
+    missing = [fn for fn in ALL_FILES if raw.get(fn, 0) <= 0]
+    if missing:
+        guardrail_violations.append(
+            f"{phase_label} missing nonzero weight for: {missing}"
+        )
+
+    # Phase A specifically must have BV strictly larger than every other
+    # file's weight (the BV-heavy invariant).
+    if phase_label == "phaseA":
+        bv_min = min(raw.get("BALANCE.bmp", 0), raw.get("VOLUME.bmp", 0))
+        for fn in ALL_FILES:
+            if fn in ("BALANCE.bmp", "VOLUME.bmp"):
+                continue
+            if raw.get(fn, 0) >= bv_min:
+                guardrail_violations.append(
+                    f"phaseA invariant: {fn} weight {raw[fn]} >= BV weight {bv_min}"
+                )
+
+# Distinct run dirs check.
+out_dirs = {p: _yaml.safe_load((REPO / y).read_text(encoding="utf-8")).get("out", "")
+            for p, y in PHASES}
+if len(set(out_dirs.values())) != len(out_dirs):
+    guardrail_violations.append(f"non-distinct run dirs: {out_dirs}")
+
+print("\n-- guardrail summary --", flush=True)
+if guardrail_violations:
+    print("GUARDRAIL FAILED. Refusing to launch training:", flush=True)
+    for v in guardrail_violations:
+        print(f"  ! {v}", flush=True)
+    raise SystemExit("guardrail violations — fix the yamls and re-push")
+print("GUARDRAIL OK. All three phases pass pre-launch checks.", flush=True)
+print(f"  Phase A: BV-heavy, every file nonzero, state_family=1.0", flush=True)
+print(f"  Phase B: broader, every file nonzero, state_family=1.0", flush=True)
+print(f"  Phase C: same weights as B, mixed mask "
+      f"(sf=0.6/rr=0.3/pv=0.1)", flush=True)
+# ----- end GUARDRAIL ------------------------------------------------------
+
 # Train the three phases sequentially. Phase B and C have resume-from
 # baked into their YAMLs pointing at the previous phase's @runs/.../
 # last.safetensors path, which the runtime resolves to
-# /kaggle/working/runs/v7_completer_gateB_phaseX/last.safetensors.
+# /kaggle/working/runs/gateB_curriculum_phaseX/last.safetensors.
 for phase_label, yaml_path in PHASES:
     summaries.append(_train_phase(phase_label, yaml_path))
 
@@ -147,7 +271,7 @@ def _eval(phase: str, snap: Path, mode: str, out_json: Path) -> dict:
 
 eval_index: list[dict] = []
 for phase_label, _ in PHASES:
-    run_dir = RUNS_DIR / f"v7_completer_gateB_{phase_label}"
+    run_dir = RUNS_DIR / f"gateB_curriculum_{phase_label}"
     print(f"\n=== {phase_label} run dir contents ===", flush=True)
     for p in sorted(run_dir.glob("*"))[:50]:
         print(f"  {p.name}  ({p.stat().st_size} B)", flush=True)
@@ -194,7 +318,7 @@ worst = _worst_skins(last_phaseC_mix.get("per_skin", {}) if last_phaseC_mix else
 print(f"\n=== worst {NUM_WORST_SKINS} skins (Phase C, mix, final) ===", flush=True)
 print(json.dumps(worst, indent=2), flush=True)
 
-phaseC_last = RUNS_DIR / "v7_completer_gateB_phaseC" / "last.safetensors"
+phaseC_last = RUNS_DIR / "gateB_curriculum_phaseC" / "last.safetensors"
 diff_dir = OUT / "diffs"
 diff_dir.mkdir(exist_ok=True)
 if worst and phaseC_last.exists():
@@ -227,7 +351,7 @@ import shutil
 keep = WORK / "kept_artefacts"
 keep.mkdir(exist_ok=True)
 for phase_label, _ in PHASES:
-    run_dir = RUNS_DIR / f"v7_completer_gateB_{phase_label}"
+    run_dir = RUNS_DIR / f"gateB_curriculum_{phase_label}"
     p_keep = keep / phase_label
     p_keep.mkdir(exist_ok=True)
     for name in ("metrics.jsonl", "config.json", "manifest.json",

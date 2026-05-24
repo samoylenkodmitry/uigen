@@ -10,7 +10,7 @@
 name: v7_completer_gateB_phaseB
 trainer: train_v7_completer.py
 
-out: "@runs/v7_completer_gateB_phaseB"
+out: "@runs/gateB_curriculum_phaseB"
 
 data:
   state_families: configs/state_families_classic.yaml
@@ -38,7 +38,7 @@ args:
   checkpoint-every: 5000
   snapshot-every: 10000
   progress-every: 200
-  resume-from: "@runs/v7_completer_gateB_phaseA/last.safetensors"
+  resume-from: "@runs/gateB_curriculum_phaseA/last.safetensors"
   seed: 7
 
 notes: |

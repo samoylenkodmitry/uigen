@@ -10,7 +10,7 @@
 name: v7_completer_gateB_phaseA
 trainer: train_v7_completer.py
 
-out: "@runs/v7_completer_gateB_phaseA"
+out: "@runs/gateB_curriculum_phaseA"
 
 data:
   state_families: configs/state_families_classic.yaml
