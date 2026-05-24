@@ -65,6 +65,39 @@ DEFAULT_FILE_WEIGHTS: dict[str, float] = {
 FILE_TO_ID: dict[str, int] = {spec.file_name: idx for idx, spec in enumerate(TRAINABLE_EXPORT_SPECS)}
 
 
+def build_file_weights(
+    yaml_path: str | Path | None,
+    mode: str,
+    *,
+    defaults: dict[str, float] = DEFAULT_FILE_WEIGHTS,
+) -> dict[str, float]:
+    """Resolve the trainer's effective `file_weights` dict.
+
+    mode='merge'   -> start from `defaults`, overlay YAML keys.
+    mode='replace' -> start empty; ONLY YAML keys are sampled.
+
+    Returns a dict[file_name -> non-negative weight]. The sampler then
+    drops files with weight <= 0 and normalizes the rest.
+    """
+    if mode not in ("merge", "replace"):
+        raise ValueError(f"mode must be 'merge' or 'replace', got {mode!r}")
+    if mode == "replace" and yaml_path is None:
+        raise ValueError(
+            "replace mode requires a YAML path; otherwise every file gets weight 0"
+        )
+    if mode == "merge":
+        weights = dict(defaults)
+    else:
+        weights = {}
+    if yaml_path is not None:
+        import yaml
+        override = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
+        if not isinstance(override, dict):
+            raise ValueError(f"{yaml_path}: expected a mapping, got {type(override).__name__}")
+        weights.update({str(k): float(v) for k, v in override.items()})
+    return weights
+
+
 def save_state_dict(path: Path, state_dict: dict) -> None:
     from safetensors.torch import save_file
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,6 +244,15 @@ def main() -> int:
     parser.add_argument("--file-sampling-weights", default=None,
                         help="Path to a YAML file mapping file_name -> weight. "
                              "Overrides the built-in default. Only used in weighted mode.")
+    parser.add_argument("--file-sampling-weights-mode",
+                        choices=["merge", "replace"], default="merge",
+                        help="How --file-sampling-weights interacts with the built-in "
+                             "DEFAULT_FILE_WEIGHTS. 'merge' (default, backward-compatible): "
+                             "YAML keys override defaults; files absent from YAML keep their "
+                             "default weight and stay in the sampling pool. 'replace': files "
+                             "absent from YAML get weight 0 and are dropped from the sampler. "
+                             "Use 'replace' for focused probes that need to train on a strict "
+                             "subset of files only.")
     parser.add_argument("--within-file-replacement", dest="within_file_replacement",
                         type=lambda s: str(s).lower() not in ("0", "false", "no"),
                         default=True,
@@ -255,22 +297,31 @@ def main() -> int:
         print(f"--only-file {keep!r}: kept {len(dataset.items)} item(s)")
     generator = torch.Generator().manual_seed(args.seed)
     if args.sampling_mode == "weighted":
-        file_weights = dict(DEFAULT_FILE_WEIGHTS)
-        if args.file_sampling_weights:
-            import yaml
-            override = yaml.safe_load(Path(args.file_sampling_weights).read_text(encoding="utf-8"))
-            if not isinstance(override, dict):
-                raise SystemExit(f"{args.file_sampling_weights}: expected a mapping")
-            file_weights.update({str(k): float(v) for k, v in override.items()})
+        weights_mode = args.file_sampling_weights_mode
+        try:
+            file_weights = build_file_weights(
+                args.file_sampling_weights, weights_mode,
+            )
+        except ValueError as e:
+            raise SystemExit(str(e))
         sampler = WeightedSameFileBatchSampler(
             dataset.items, batch_size=args.batch,
             file_weights=file_weights, num_batches=args.steps,
             generator=generator,
             within_file_replacement=args.within_file_replacement,
         )
-        print(f"weighted sampling: {sampler.num_batches} batches, "
-              f"within_file_replacement={sampler.within_file_replacement}, "
-              f"file weights {dict(zip(sampler.files, [round(float(p), 3) for p in sampler.probs.tolist()]))}")
+        # Log the effective normalized probability per file so the run log
+        # makes the actual sampling distribution visible — catches mistakes
+        # like "I wrote a strip-only YAML but merge mode kept other files".
+        eff_probs = sorted(
+            zip(sampler.files, [float(p) for p in sampler.probs.tolist()]),
+            key=lambda kv: -kv[1],
+        )
+        print(f"weighted sampling: mode={weights_mode}  batches={sampler.num_batches}  "
+              f"within_file_replacement={sampler.within_file_replacement}")
+        print("effective file probabilities (post-normalization):")
+        for fn, p in eff_probs:
+            print(f"  {fn:20s} {p:7.4f}")
     else:
         sampler = SameFileBatchSampler(
             dataset.items, batch_size=args.batch, shuffle=True, generator=generator,

@@ -254,6 +254,62 @@ def test_weighted_sampler_without_replacement_falls_back_when_group_too_small():
         assert len(batch) == 4  # no crash; replacement used because group<batch
 
 
+def test_build_file_weights_replace_only_samples_listed_files(tmp_path):
+    """In replace mode, a YAML listing only BALANCE/VOLUME must produce a
+    weights dict that, when handed to the sampler, draws batches only from
+    those two file groups — never from defaults. Without this, a yaml named
+    'strip-only' silently inherits EQMAIN/MAIN/etc and the probe is not
+    actually focused.
+    """
+    from train_v7_completer import build_file_weights
+
+    yaml_path = tmp_path / "bv_only.yaml"
+    yaml_path.write_text("BALANCE.bmp: 1\nVOLUME.bmp: 1\n", encoding="utf-8")
+    weights = build_file_weights(yaml_path, mode="replace")
+    assert set(weights) == {"BALANCE.bmp", "VOLUME.bmp"}
+
+    items = _items_for_n_skins(8)
+    sampler = WeightedSameFileBatchSampler(
+        items, batch_size=4, file_weights=weights, num_batches=200,
+        generator=torch.Generator().manual_seed(0),
+    )
+    seen_files: set[str] = set()
+    for batch in sampler:
+        for idx in batch:
+            seen_files.add(items[idx][1])
+    assert seen_files == {"BALANCE.bmp", "VOLUME.bmp"}, (
+        f"replace mode should restrict to listed files, got {seen_files}"
+    )
+
+
+def test_build_file_weights_merge_keeps_defaults(tmp_path):
+    """In merge mode (default, backward compat), a YAML override must not
+    drop the other files — they should remain at their default weights.
+    This protects the older multi-file recipes from accidentally narrowing.
+    """
+    from train_v7_completer import build_file_weights, DEFAULT_FILE_WEIGHTS
+
+    yaml_path = tmp_path / "doubled_strips.yaml"
+    yaml_path.write_text("BALANCE.bmp: 8\nVOLUME.bmp: 10\n", encoding="utf-8")
+    weights = build_file_weights(yaml_path, mode="merge")
+    # YAML keys override defaults.
+    assert weights["BALANCE.bmp"] == 8
+    assert weights["VOLUME.bmp"] == 10
+    # Default files NOT in YAML keep their original weight.
+    for fn, w in DEFAULT_FILE_WEIGHTS.items():
+        if fn not in {"BALANCE.bmp", "VOLUME.bmp"}:
+            assert weights[fn] == w, f"merge dropped default for {fn}"
+
+
+def test_build_file_weights_replace_requires_yaml():
+    """Replace mode without a YAML path would zero every file. The helper
+    must reject that loudly rather than silently producing an empty dict."""
+    from train_v7_completer import build_file_weights
+
+    with pytest.raises(ValueError, match="replace mode requires a YAML path"):
+        build_file_weights(None, mode="replace")
+
+
 def test_default_dataloader_mixed_shapes_explodes_loudly():
     """Sanity that the dangerous path is still loud: default DataLoader with
     batch_size>1 and shuffle=False over the V7 dataset must raise because

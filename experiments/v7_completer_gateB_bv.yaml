@@ -1,0 +1,73 @@
+# V7 Gate B-BV — BALANCE+VOLUME-only state_family probe.
+#
+# The strip kernel's by_file breakdown narrowed the failing class. Among
+# strip files, only the two 28-frame vertical slider sheets (BALANCE and
+# VOLUME) stay stuck at train loss ~0.09 while the others descend cleanly:
+#
+#   BALANCE.bmp  train-loss ~0.09  (28 vertical slider frames)
+#   VOLUME.bmp   train-loss ~0.08  (28 vertical slider frames)
+#   POSBAR.bmp   train-loss  0.026 (track + thumb)
+#   PLAYPAUS.bmp train-loss  0.013 (3 horizontal frames)
+#   MONOSTER.bmp train-loss  0.014 (2 vertical frames)
+#   CBUTTONS.bmp train-loss  0.010 (button pairs)
+#
+# This probe trains exclusively on BALANCE + VOLUME with state_family
+# masks. Uses --file-sampling-weights-mode=replace so the trainer does NOT
+# merge with DEFAULT_FILE_WEIGHTS — the previous strip-only probe was
+# silently broadened by that merge.
+#
+# Decision branch:
+#   strong descent on BALANCE/VOLUME  -> capacity OK, gate needs staged
+#       curriculum with BALANCE/VOLUME pretraining.
+#   stalls around 0.08-0.09          -> state-family formulation for the
+#       28-frame vertical slider files is wrong / underconstrained: one
+#       visible frame may not contain enough information to infer all 27
+#       siblings. Then we need file-specific masks or losses.
+
+name: v7_completer_gateB_bv
+trainer: train_v7_completer.py
+
+out: "@runs/v7_completer_gateB_bv"
+
+data:
+  state_families: configs/state_families_classic.yaml
+  skin_sources: "@data/data_v7_16skin_completion"
+
+args:
+  state-families: configs/state_families_classic.yaml
+  steps: 30000
+  batch: 12
+  within-file-replacement: "false"
+  lr: 1.0e-3
+  weight-decay: 1.0e-4
+  base-channels: 48
+  file-embedding-dim: 32
+  skin-embedding-dim: 64
+  sampling-mode: weighted
+  file-sampling-weights: configs/v7_file_weights_bv_only.yaml
+  file-sampling-weights-mode: replace
+  sobel-weight: 0.25
+  mask-provenance: 0.0
+  mask-state-family: 1.0
+  mask-random-rect: 0.0
+  mask-whole-file: 0.0
+  mask-passthrough: 0.0
+  checkpoint-every: 5000
+  snapshot-every: 5000
+  progress-every: 200
+  seed: 5
+
+notes: |
+  state_family mask only on the two 28-frame vertical slider files.
+  BALANCE and VOLUME each have 14 (skin, file) items, so a same-file batch
+  of 12 with within-file-replacement=false sees 12 distinct skins per step
+  per file group.
+
+  Eval after training: per-snapshot per-file (BALANCE / VOLUME) + per-skin
+  table. Visual diffs for the worst 3 skins via dump_v7_completer_diffs.py
+  so we can see *how* the model fails on the slider frames (smeared edges,
+  hue drift, hallucinated frames, etc.).
+
+  Acceptance hint for this probe:
+    train-loss << 0.04 -> capacity OK, curriculum is the right fix.
+    train-loss ~= 0.08 -> formulation is wrong; inspect the visual diffs.

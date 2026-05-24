@@ -1,0 +1,15 @@
+# V7 BALANCE+VOLUME-only weights — for use with
+# --file-sampling-weights-mode replace.
+#
+# Per the strip-probe live-log breakdown, BALANCE and VOLUME (both 28-frame
+# vertical slider sheets) are the only files stuck at train-loss ~0.09 while
+# the other strip files (POSBAR / PLAYPAUS / MONOSTER) descended to <0.03.
+# So the failure class is not "strip files" but specifically the
+# 28-frame vertical slider files.
+#
+# In replace mode the trainer's DEFAULT_FILE_WEIGHTS are ignored and any
+# file absent from this YAML gets weight 0. The sampler drops weight-0
+# files so the optimizer only ever sees BALANCE/VOLUME batches.
+
+BALANCE.bmp: 1
+VOLUME.bmp:  1

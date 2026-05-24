@@ -66,30 +66,40 @@ def _cdp_up() -> bool:
 
 
 def _ensure_clone() -> None:
-    """Create or refresh the profile clone.
+    """Create a fully isolated profile clone.
 
-    We only mirror Default (the active profile) and Local State. The
-    clone is shallow-refreshed each call so the session cookies stay
-    current with what the user's interactive Thorium has.
+    Hard-resets CLONE_PROFILE on every call. We deep-copy Default and
+    Local State without following symlinks: a prior crashed run can
+    leave behind Singleton* symlinks that point into the *interactive*
+    Thorium's IPC socket directory (/tmp/.org.chromium.Chromium.XXXXXX).
+    If we preserve those symlinks, the headless instance follows them
+    and starts talking to the user's main Thorium instead of standing
+    up its own — which crashes both. Wiping the whole clone every
+    launch is cheap (a couple seconds, ~100 MB) and removes the entire
+    class of problem.
     """
     if not SRC_PROFILE.exists():
         sys.exit(f"thorium source profile not found at {SRC_PROFILE}")
-    CLONE_PROFILE.mkdir(parents=True, exist_ok=True)
+    if CLONE_PROFILE.exists():
+        shutil.rmtree(CLONE_PROFILE)
+    CLONE_PROFILE.mkdir(parents=True)
     src_default = SRC_PROFILE / "Default"
     dst_default = CLONE_PROFILE / "Default"
-    if dst_default.exists():
-        shutil.rmtree(dst_default)
-    shutil.copytree(src_default, dst_default, symlinks=True, ignore_dangling_symlinks=True)
-    # Local State holds the per-profile preferences (not strictly required
-    # for cookies, but Chromium expects it for a healthy launch).
+    # symlinks=False -> Python materializes symlink targets into real
+    # files / dirs. Any Singleton* symlinks in src_default would resolve
+    # to dangling targets and be skipped (since the user's main Thorium
+    # owns those sockets); we don't want to bring them across anyway.
+    def _ignore_singletons(_dir, names):
+        return [n for n in names if n.startswith("Singleton") or n == "lockfile"]
+    shutil.copytree(
+        src_default, dst_default,
+        symlinks=False,
+        ignore=_ignore_singletons,
+        ignore_dangling_symlinks=True,
+    )
     src_ls = SRC_PROFILE / "Local State"
     if src_ls.exists():
         shutil.copy2(src_ls, CLONE_PROFILE / "Local State")
-    # Singleton locks would prevent the headless instance from starting.
-    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
-        p = dst_default / name
-        if p.exists():
-            p.unlink()
 
 
 def _start_headless() -> None:
@@ -108,6 +118,17 @@ def _start_headless() -> None:
             f"--user-data-dir={CLONE_PROFILE}",
             f"--remote-debugging-port={CDP_PORT}",
             "--remote-allow-origins=*",
+            # Be a quiet, non-interactive Chromium: no first-run UI, no
+            # default-browser prompts. We deliberately do NOT pass
+            # --password-store=basic or --use-mock-keychain — those would
+            # block the portal key lookup we need for cookie decryption
+            # (same-binary -> same portal app-id -> session cookies
+            # decrypt). Isolation comes from a fresh user-data-dir each
+            # launch (see _ensure_clone) plus the IPC socket dir being
+            # derived from the user-data-dir path, so the headless's
+            # socket can never collide with the user's main Thorium.
+            "--no-first-run",
+            "--no-default-browser-check",
         ],
         stdout=open(HEADLESS_LOG, "w"),
         stderr=subprocess.STDOUT,
@@ -115,7 +136,9 @@ def _start_headless() -> None:
         start_new_session=True,
     )
     PID_FILE.write_text(str(proc.pid))
-    deadline = time.monotonic() + 30
+    # First-launch can take >30s on a cold cache because we just wiped
+    # the clone and Chromium has to rebuild HSTS state / extension stubs.
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if _cdp_up():
             return
@@ -168,7 +191,7 @@ def fetch_progress_lines(kernel_url: str, settle_seconds: float = 15.0) -> list[
             ".map(e => e.innerText || '')"
             ".join('\\n')"
             ".split('\\n')"
-            ".filter(t => /(\\[step\\s+\\d+\\/\\d+|training start:|trained V7Completer)/.test(t))"
+            ".filter(t => /(\\[step\\s+\\d+\\/\\d+|training start:|trained V7Completer|\\bby_(mode|file|skin):)/.test(t))"
             ".join('\\n')"
         )
         res = _send(ws, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
@@ -179,14 +202,20 @@ def fetch_progress_lines(kernel_url: str, settle_seconds: float = 15.0) -> list[
 
 
 _STEP_RE = re.compile(r"\[step\s+(\d+)/(\d+)")
+_BREAKDOWN_RE = re.compile(r"^by_(mode|file|skin):")
 
 
 def _dedupe(lines: list[str]) -> list[str]:
     """Kaggle's UI splits the log across overlapping containers, producing
-    triplicated step lines. Keep one entry per step number, preserving
-    non-step lines."""
-    seen_steps: set[int] = set()
-    out: list[str] = []
+    triplicated step lines. We dedupe by step number and group each step's
+    breakdown sub-lines (by_mode / by_file / by_skin) under their owning
+    step. Banner lines (training start / trained V7Completer) bracket the
+    output."""
+    step_lines: dict[int, str] = {}
+    step_breakdowns: dict[int, list[str]] = {}
+    banners_start: list[str] = []
+    banners_end: list[str] = []
+    current_step: int | None = None
     for raw in lines:
         line = raw.strip()
         if not line:
@@ -194,14 +223,32 @@ def _dedupe(lines: list[str]) -> list[str]:
         m = _STEP_RE.search(line)
         if m:
             step = int(m.group(1))
-            if step in seen_steps:
-                continue
-            seen_steps.add(step)
-        # de-dupe banner lines exactly
-        if line in out:
+            current_step = step
+            if step not in step_lines:
+                step_lines[step] = line
             continue
-        out.append(line)
-    out.sort(key=_sort_key)
+        if _BREAKDOWN_RE.match(line):
+            if current_step is None:
+                continue
+            slot = step_breakdowns.setdefault(current_step, [])
+            if line not in slot:
+                slot.append(line)
+            continue
+        if line.startswith("training start:"):
+            if line not in banners_start:
+                banners_start.append(line)
+            continue
+        if line.startswith("trained V7Completer"):
+            if line not in banners_end:
+                banners_end.append(line)
+            continue
+    out: list[str] = []
+    out.extend(banners_start)
+    for step in sorted(step_lines):
+        out.append(step_lines[step])
+        for b in step_breakdowns.get(step, []):
+            out.append("  " + b)
+    out.extend(banners_end)
     return out
 
 
