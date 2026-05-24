@@ -1,0 +1,61 @@
+# V7 Phase 0 / Gate B-skin continuation from the 80k checkpoint.
+#
+# The 80k Gate B-skin run improved every per-file metric vs the no-skin
+# baseline and loss was still descending — under-exposed per skin, not yet
+# a capacity proof (5.7k samples/skin at batch=1).
+#
+# Recipe change vs v7_completer_gateB_skin.yaml:
+#   - batch              : 1   -> 14   (covers every skin every step)
+#   - within-file-replace: T   -> F    (distinct skins, not duplicates)
+#   - resume-from        : (none) -> last.safetensors of the 80k run
+#
+# Everything else stays:
+#   c48, file_embedding_dim=32, skin_embedding_dim=64, sobel_weight=0.25,
+#   weighted sampling with configs/v7_file_weights_continuation.yaml,
+#   80 000 additional optimizer steps (so 14 * 14 = 196x per-skin samples
+#   over the original baseline at the same step count).
+#
+# T4 expected wall time: 80k * 0.13 s/step ~ 173 min.
+#
+# --resume-from validates num_skins_buffer + skin_embedding_dim_buffer
+# match, so the trainer will refuse to seed from a non-skin checkpoint.
+
+name: v7_completer_gateB_skin_continuation
+trainer: train_v7_completer.py
+
+# Distinct run dir so the 80k source artefacts stay intact.
+out: "@runs/v7_completer_gateB_skin_continuation"
+
+data:
+  state_families: configs/state_families_classic.yaml
+  skin_sources: "@data/data_v7_16skin_completion"
+
+args:
+  state-families: configs/state_families_classic.yaml
+  steps: 80000
+  batch: 14
+  # Quoted so scripts/run_experiment.py emits `--within-file-replacement false`
+  # instead of omitting (its bool convention drops false flags entirely, which
+  # would silently leave the trainer's default of within-file-replacement=true).
+  within-file-replacement: "false"
+  lr: 5.0e-4
+  weight-decay: 1.0e-4
+  base-channels: 48
+  file-embedding-dim: 32
+  skin-embedding-dim: 64
+  sampling-mode: weighted
+  file-sampling-weights: configs/v7_file_weights_continuation.yaml
+  sobel-weight: 0.25
+  resume-from: /kaggle/input/datasets/dmitriisamoilenko/uigen-gatebskin-80k-ckpt/last.safetensors
+  checkpoint-every: 5000
+  snapshot-every: 10000
+  seed: 1
+
+notes: |
+  Continuation pass. Acceptance unchanged:
+    aggregate supported_mae < 0.015
+    aggregate hit5          > 0.90
+    small-asset per-file hit5 > 0.80 for VOLUME / BALANCE / MONOSTER /
+      PLAYPAUS / POSBAR.
+  LR halved (5e-4) because resume continues a previously-tuned optimum;
+  a fresh LR would risk wiping the 80k progress.
