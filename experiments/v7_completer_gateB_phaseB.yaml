@@ -1,0 +1,49 @@
+# Gate B curriculum — Phase B: all-file state-family consolidation.
+#
+# Resumes from Phase A's last.safetensors. Same state_family-only mask
+# distribution but with broader file weights (BV down from 8 to 4, other
+# files up from 1-2 to 2-3) so the optimizer redistributes attention
+# evenly while keeping BV at the largest share.
+#
+# 30k more steps (cumulative 60k including Phase A).
+
+name: v7_completer_gateB_phaseB
+trainer: train_v7_completer.py
+
+out: "@runs/v7_completer_gateB_phaseB"
+
+data:
+  state_families: configs/state_families_classic.yaml
+  skin_sources: "@data/data_v7_16skin_completion"
+
+args:
+  state-families: configs/state_families_classic.yaml
+  steps: 30000
+  batch: 12
+  within-file-replacement: "false"
+  lr: 1.0e-3
+  weight-decay: 1.0e-4
+  base-channels: 48
+  file-embedding-dim: 32
+  skin-embedding-dim: 64
+  sampling-mode: weighted
+  file-sampling-weights: configs/v7_file_weights_gateB_phaseBC.yaml
+  file-sampling-weights-mode: replace
+  sobel-weight: 0.25
+  mask-provenance: 0.0
+  mask-state-family: 1.0
+  mask-random-rect: 0.0
+  mask-whole-file: 0.0
+  mask-passthrough: 0.0
+  checkpoint-every: 5000
+  snapshot-every: 10000
+  progress-every: 200
+  resume-from: "@runs/v7_completer_gateB_phaseA/last.safetensors"
+  seed: 7
+
+notes: |
+  Phase B acceptance hint:
+    state_family mae across all files: < 0.020
+    BV state_family mae: stays < 0.010
+    POSBAR/MONOSTER/PLAYPAUS state_family mae: < 0.05
+  Phase C swaps to mixed mask and inherits Phase B's weights.

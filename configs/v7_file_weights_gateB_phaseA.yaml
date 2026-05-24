@@ -1,0 +1,20 @@
+# Gate B curriculum — Phase A weights (vertical-slider emphasis).
+#
+# Use with --file-sampling-weights-mode replace so absent files truly get 0.
+#
+# Heavy on the two 28-frame vertical sliders. The other small / strip
+# files are kept at low weight so they don't regress (the BV-only probe
+# showed POSBAR/MONOSTER/PLAYPAUS mae jumping from ~0.07 to ~0.15 when
+# they were zeroed out entirely — Phase A must NOT repeat that mistake).
+
+BALANCE.bmp:  8
+VOLUME.bmp:   8
+POSBAR.bmp:   2
+MONOSTER.bmp: 2
+PLAYPAUS.bmp: 2
+CBUTTONS.bmp: 2
+SHUFREP.bmp:  2
+EQMAIN.bmp:   2
+MAIN.bmp:     1
+TITLEBAR.bmp: 1
+PLEDIT.bmp:   1

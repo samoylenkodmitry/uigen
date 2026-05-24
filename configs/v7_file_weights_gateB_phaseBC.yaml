@@ -1,0 +1,21 @@
+# Gate B curriculum — Phase B / Phase C weights (consolidation).
+#
+# Use with --file-sampling-weights-mode replace.
+#
+# BV still gets the largest share but only 2x the chrome / panel files,
+# instead of Phase A's 4-8x. Phase B uses these weights with
+# state_family-only masks to consolidate every file. Phase C inherits
+# the same weights but uses the mixed mask distribution so the eval-mix
+# acceptance criterion (mae<0.015, hit5>0.90) becomes the target.
+
+BALANCE.bmp:  4
+VOLUME.bmp:   4
+POSBAR.bmp:   3
+MONOSTER.bmp: 3
+PLAYPAUS.bmp: 3
+CBUTTONS.bmp: 3
+SHUFREP.bmp:  3
+EQMAIN.bmp:   3
+MAIN.bmp:     2
+TITLEBAR.bmp: 2
+PLEDIT.bmp:   2
