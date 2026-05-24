@@ -209,6 +209,10 @@ def main() -> int:
                              "Pass --within-file-replacement false to draw distinct indices when "
                              "the group is at least batch_size — useful for multi-skin Gate B "
                              "where one batch should cover distinct skins instead of duplicates.")
+    parser.add_argument("--progress-every", type=int, default=200,
+                        help="Print a step/loss/ETA progress line to stdout every N steps. "
+                             "0 disables. Use small values for short cloud runs so the kernel "
+                             "log isn't silent.")
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -352,6 +356,12 @@ def main() -> int:
     start_time = _time.monotonic()
     stop_after_seconds = float(args.stop_after_minutes) * 60.0
     stopped_by_time = False
+    progress_every = int(getattr(args, "progress_every", 200) or 200)
+    recent_losses: list[float] = []
+    recent_window = max(progress_every, 1)
+    last_progress_time = start_time
+    print(f"training start: target steps={args.steps} batch={args.batch} "
+          f"progress_every={progress_every}", flush=True)
     with metrics_path.open("w", encoding="utf-8") as metrics_file:
         while step < args.steps:
             dataset.set_epoch(epoch)
@@ -394,7 +404,29 @@ def main() -> int:
                         out / f"snapshot_step{step + 1:06d}.safetensors",
                         model.state_dict(),
                     )
+                recent_losses.append(logged["total"])
+                if len(recent_losses) > recent_window:
+                    recent_losses = recent_losses[-recent_window:]
                 step += 1
+                if progress_every > 0 and step % progress_every == 0:
+                    now = _time.monotonic()
+                    dt = now - last_progress_time
+                    sec_per_step = dt / progress_every if progress_every > 0 else 0.0
+                    remaining = max(args.steps - step, 0)
+                    eta_sec = sec_per_step * remaining
+                    eta_min = eta_sec / 60.0
+                    mean_recent = sum(recent_losses) / max(len(recent_losses), 1)
+                    pct = 100.0 * step / max(args.steps, 1)
+                    elapsed_min = (now - start_time) / 60.0
+                    print(
+                        f"[step {step:>6d}/{args.steps}  {pct:5.1f}%]  "
+                        f"loss(mean{len(recent_losses):>4d})={mean_recent:.4f}  "
+                        f"best={best:.4f}  "
+                        f"sec/step={sec_per_step:.3f}  "
+                        f"elapsed={elapsed_min:6.1f}min  ETA={eta_min:6.1f}min",
+                        flush=True,
+                    )
+                    last_progress_time = now
             if stopped_by_time:
                 break
             epoch += 1
