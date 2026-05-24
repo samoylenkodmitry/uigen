@@ -201,6 +201,14 @@ def main() -> int:
     parser.add_argument("--file-sampling-weights", default=None,
                         help="Path to a YAML file mapping file_name -> weight. "
                              "Overrides the built-in default. Only used in weighted mode.")
+    parser.add_argument("--within-file-replacement", dest="within_file_replacement",
+                        type=lambda s: str(s).lower() not in ("0", "false", "no"),
+                        default=True,
+                        help="Weighted-mode only. When True (default) a same-file batch samples "
+                             "indices with replacement (required for groups smaller than batch). "
+                             "Pass --within-file-replacement false to draw distinct indices when "
+                             "the group is at least batch_size — useful for multi-skin Gate B "
+                             "where one batch should cover distinct skins instead of duplicates.")
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -244,8 +252,10 @@ def main() -> int:
             dataset.items, batch_size=args.batch,
             file_weights=file_weights, num_batches=args.steps,
             generator=generator,
+            within_file_replacement=args.within_file_replacement,
         )
         print(f"weighted sampling: {sampler.num_batches} batches, "
+              f"within_file_replacement={sampler.within_file_replacement}, "
               f"file weights {dict(zip(sampler.files, [round(float(p), 3) for p in sampler.probs.tolist()]))}")
     else:
         sampler = SameFileBatchSampler(

@@ -222,6 +222,38 @@ def test_weighted_sampler_with_real_dataloader():
     assert sum(files_seen.values()) == 20
 
 
+def test_weighted_sampler_without_replacement_gives_distinct_indices():
+    """When the file group is at least batch_size, within_file_replacement=False
+    must draw distinct indices within a batch — that is the whole point of the
+    flag for Gate B (one batch should cover distinct skins, not duplicates)."""
+    # 14 "skins" so every file group has 14 items.
+    items = _items_for_n_skins(14)
+    weights = {"EQMAIN.bmp": 1.0}
+    sampler = WeightedSameFileBatchSampler(
+        items, batch_size=8, file_weights=weights, num_batches=20,
+        generator=torch.Generator().manual_seed(0),
+        within_file_replacement=False,
+    )
+    for batch in sampler:
+        assert len(batch) == 8
+        assert len(set(batch)) == 8, batch  # distinct dataset indices => distinct skins
+
+
+def test_weighted_sampler_without_replacement_falls_back_when_group_too_small():
+    """Safety: if the chosen file group has fewer items than batch_size, the
+    sampler must still yield a batch (with replacement for that file), not
+    raise — otherwise one-skin runs would explode."""
+    items = _items_for_n_skins(1)  # group size 1 per file
+    weights = {"EQMAIN.bmp": 1.0}
+    sampler = WeightedSameFileBatchSampler(
+        items, batch_size=4, file_weights=weights, num_batches=5,
+        generator=torch.Generator().manual_seed(0),
+        within_file_replacement=False,
+    )
+    for batch in sampler:
+        assert len(batch) == 4  # no crash; replacement used because group<batch
+
+
 def test_default_dataloader_mixed_shapes_explodes_loudly():
     """Sanity that the dangerous path is still loud: default DataLoader with
     batch_size>1 and shuffle=False over the V7 dataset must raise because

@@ -76,6 +76,12 @@ def main() -> int:
                         help="Override batch size; defaults to experiment's batch.")
     parser.add_argument("--device", default=None,
                         help="Override device; defaults to runtime's device.")
+    parser.add_argument("--within-file-replacement", dest="within_file_replacement",
+                        type=lambda s: str(s).lower() not in ("0", "false", "no"),
+                        default=None,
+                        help="Weighted-mode only. Mirror of the trainer flag so the sweep "
+                             "exercises the same code path. If omitted, reads the experiment "
+                             "YAML's value (default True).")
     args = parser.parse_args()
 
     runtime = load_runtime_from_env_or_arg(args.runtime)
@@ -98,6 +104,11 @@ def main() -> int:
     sampling_mode = _extract_arg(argv, "--sampling-mode", "epoch")
     full_steps = int(_extract_arg(argv, "--steps", 1))
     batch_size = int(args.batch or _extract_arg(argv, "--batch", 1))
+    if args.within_file_replacement is None:
+        wfr_raw = _extract_arg(argv, "--within-file-replacement", "true")
+        within_file_replacement = str(wfr_raw).lower() not in ("0", "false", "no")
+    else:
+        within_file_replacement = bool(args.within_file_replacement)
 
     device = torch.device(args.device or runtime.device)
     skin_sources = _parse_skin_sources_arg(skin_sources_arg)
@@ -108,6 +119,8 @@ def main() -> int:
     print(f"  torch:     {env.get('torch_version')}")
     print(f"  device:    {device}")
     print(f"  amp:       {runtime.amp}")
+    print(f"  batch:     {batch_size}")
+    print(f"  sampling:  {sampling_mode} (within_file_replacement={within_file_replacement})")
     if env.get("cuda_devices"):
         d = env["cuda_devices"][0]
         print(f"  GPU:       {d['name']} ({d['total_memory_mib']} MiB)")
@@ -124,6 +137,7 @@ def main() -> int:
         sampler = WeightedSameFileBatchSampler(
             dataset.items, batch_size=batch_size, file_weights=weights,
             num_batches=args.steps, generator=torch.Generator().manual_seed(0),
+            within_file_replacement=within_file_replacement,
         )
     else:
         sampler = SameFileBatchSampler(
