@@ -41,7 +41,7 @@ can tune it for short benchmarks (N=20) versus long training (N=200).
 When in doubt: print more, not less. A handful of extra log lines per
 minute costs nothing; one un-observable 4-hour run wastes a quota.
 
-## Kaggle CLI: no live stop, no live stdout
+## Kaggle CLI: no live stop, no live stdout (workaround: scripts/kaggle_live_log.py)
 
 `kaggle kernels` exposes `push/status/output/logs/delete` but no
 `cancel`/`stop`. To halt a running script kernel you must use the
@@ -55,3 +55,14 @@ Plan for it: save checkpoints frequently enough that a forced cancel
 loses at most a tolerable number of steps. The V7 trainer defaults
 (`--checkpoint-every 5000`, `--snapshot-every 10000`) bound this at
 ≤5000 steps.
+
+For live progress while a kernel is still running, use
+`scripts/kaggle_live_log.py owner/slug`. It snapshots the user's
+`~/.config/thorium` profile, launches a headless `thorium-browser`
+against the snapshot with CDP enabled on `127.0.0.1:9222`, navigates
+to the kernel page (the session cookie comes from the snapshotted
+profile — the portal app-id matches the original binary so cookies
+decrypt), pulls every visible text node, filters for trainer progress
+lines, and dedupes by step number. Reuses an already-running headless
+instance if present. Requires `--progress-every N` on the trainer to
+actually be emitting step lines.
