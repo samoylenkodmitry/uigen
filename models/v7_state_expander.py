@@ -38,6 +38,14 @@ from models.v7_completer import (
 )
 
 
+# Output-head parameterizations (compared in the S1 head A/B):
+#   residual  - clamp(source + tanh(delta)); bounded residual (the original).
+#   direct    - sigmoid(logits); predict the target outright, no residual base.
+#   unbounded - clamp(source + delta); residual with no tanh bound (diagnostic).
+_OUTPUT_MODES = {"residual": 0, "direct": 1, "unbounded": 2}
+_OUTPUT_MODE_BY_CODE = {v: k for k, v in _OUTPUT_MODES.items()}
+
+
 class V7StateExpander(nn.Module):
     """Conditional frame/state translator for alternatives families.
 
@@ -65,8 +73,12 @@ class V7StateExpander(nn.Module):
         num_skins: int = 0,
         skin_embedding_dim: int = 0,
         frequencies: tuple[int, ...] = DEFAULT_FREQUENCIES,
+        output_mode: str = "residual",
     ):
         super().__init__()
+        if output_mode not in _OUTPUT_MODES:
+            raise ValueError(f"output_mode must be one of {list(_OUTPUT_MODES)}, got {output_mode!r}")
+        self.output_mode = output_mode
         self.num_families = int(num_families)
         self.max_frames = int(max_frames)
         self.base_channels = int(base_channels)
@@ -109,6 +121,9 @@ class V7StateExpander(nn.Module):
         self.out_proj = nn.Conv2d(c1, 3, kernel_size=1)
 
         self.register_buffer("model_version", torch.tensor([72], dtype=torch.int32))
+        self.register_buffer(
+            "output_mode_buffer", torch.tensor([_OUTPUT_MODES[output_mode]], dtype=torch.int32)
+        )
         for name, val in (
             ("num_families_buffer", self.num_families),
             ("max_frames_buffer", self.max_frames),
@@ -173,8 +188,13 @@ class V7StateExpander(nn.Module):
         u3 = self.fuse3(torch.cat([F.interpolate(f4, size=f3.shape[-2:], mode="nearest"), f3], dim=1))
         u2 = self.fuse2(torch.cat([F.interpolate(u3, size=f2.shape[-2:], mode="nearest"), f2], dim=1))
         u1 = self.fuse1(torch.cat([F.interpolate(u2, size=f1.shape[-2:], mode="nearest"), f1], dim=1))
+        out = self.out_proj(u1)
+        if self.output_mode == "direct":
+            # Predict the target outright; source is still an input channel so
+            # the net can copy, but it must learn to.
+            return torch.sigmoid(out)
         # Residual from source: unchanged content is an exact copy when delta=0.
-        delta = torch.tanh(self.out_proj(u1))
+        delta = torch.tanh(out) if self.output_mode == "residual" else out
         return (source_rgb + delta).clamp(0.0, 1.0)
 
 

@@ -125,6 +125,10 @@ def main() -> int:
     p.add_argument("--skin-embedding-dim", type=int, default=0,
                    help="ORACLE skin embedding width. 0 disables skin conditioning.")
     p.add_argument("--sobel-weight", type=float, default=0.25)
+    p.add_argument("--output-mode", choices=["residual", "direct", "unbounded"],
+                   default="residual",
+                   help="Output head: residual=clamp(source+tanh(delta)), "
+                        "direct=sigmoid(logits), unbounded=clamp(source+delta).")
     p.add_argument("--no-identity", action="store_true",
                    help="Exclude i==i pairs entirely (default includes them, "
                         "downweighted by --identity-weight).")
@@ -162,6 +166,7 @@ def main() -> int:
         frame_embedding_dim=args.frame_embedding_dim,
         num_skins=num_skins,
         skin_embedding_dim=args.skin_embedding_dim,
+        output_mode=args.output_mode,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     support_masks = load_support_masks()

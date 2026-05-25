@@ -8,6 +8,8 @@ import torch
 
 from collections import Counter
 
+import pytest
+
 from atlas_ai.state_pairs_dataset import StatePairsDataset, collect_alt_families
 from atlas_ai.v7_batching import SameKeyBatchSampler, WeightedSameKeyBatchSampler
 from models.v7_state_expander import V7StateExpander
@@ -143,6 +145,23 @@ def test_model_forward_shapes_and_range():
                     torch.tensor([0, 1]), torch.tensor([9, 9]))
     assert out.shape == (2, 3, 13, 68)
     assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
+
+
+def test_output_modes_forward_and_range():
+    args = dict(num_families=16, max_frames=28, base_channels=8,
+                file_embedding_dim=4, family_embedding_dim=4, frame_embedding_dim=4)
+    src = torch.rand(2, 3, 9, 9)
+    for mode in ("residual", "direct", "unbounded"):
+        m = V7StateExpander(output_mode=mode, **args)
+        assert m.output_mode == mode
+        assert int(m.output_mode_buffer.item()) in (0, 1, 2)
+        with torch.no_grad():
+            out = m(src, torch.tensor([0, 1]), torch.tensor([1, 0]),
+                    torch.tensor([0, 1]), torch.tensor([9, 9]))
+        assert out.shape == (2, 3, 9, 9)
+        assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
+    with pytest.raises(ValueError):
+        V7StateExpander(output_mode="bogus", **args)
 
 
 def test_model_forward_with_skin_embedding():

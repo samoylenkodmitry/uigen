@@ -57,6 +57,10 @@ def _model_kwargs(state: dict) -> dict:
     if ver != 72:
         raise SystemExit(f"need a V7StateExpander checkpoint (version 72), got {ver}")
     g = lambda k: int(state[k].reshape(-1)[0].item())
+    from models.v7_state_expander import _OUTPUT_MODE_BY_CODE
+    # output_mode_buffer absent on the earliest v72 checkpoints -> default residual.
+    output_mode = _OUTPUT_MODE_BY_CODE.get(g("output_mode_buffer"), "residual") \
+        if "output_mode_buffer" in state else "residual"
     return {
         "num_families": g("num_families_buffer"),
         "max_frames": g("max_frames_buffer"),
@@ -66,6 +70,7 @@ def _model_kwargs(state: dict) -> dict:
         "frame_embedding_dim": g("frame_embedding_dim_buffer"),
         "num_skins": g("num_skins_buffer"),
         "skin_embedding_dim": g("skin_embedding_dim_buffer"),
+        "output_mode": output_mode,
     }
 
 
