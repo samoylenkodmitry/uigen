@@ -162,3 +162,58 @@ reconstruction; the drops are real and monotonic but **slow** at batch=1 / lr
 rr-heavy (or balanced sf/rr) mix, and must be judged on hidden metrics. Local
 GPU OOM'd at batch 14; Kaggle T4 handled batch 12 previously.
 
+## MAIN floor test (strict) — single image overfit to convergence
+
+Question: can the corrected hidden-normalized V7Completer drive ONE textured
+MAIN.bmp below the hidden gate under random_rect masks? If not even this
+cheapest controlled case clears the bar, a 14-skin Gate B run is premature.
+
+Setup: skin `a_halo_so_bright_it_bleeds` (the highest combined texture std
+0.367 + edge density grad 0.145 of the 14 — deliberately non-trivial), one
+file MAIN.bmp, random_rect=1.0, c48, hidden loss, sobel 0.25, lr 1e-3,
+batch 1 (forced: one item), 30k steps, snapshot every 5k. Eval mask_samples=16.
+
+| snapshot | MAIN hidden_mae | hidden_hit5 | obs_passthrough |
+|---|---|---|---|
+| 5k  | 0.2063 | 0.221 | 0.0 |
+| 10k | 0.0982 | 0.282 | 0.0 |
+| 15k | 0.0509 | 0.325 | 0.0 |
+| 20k | 0.0405 | 0.370 | 0.0 |
+| 25k | 0.0298 | 0.409 | 0.0 |
+| **30k** | **0.0246** | **0.455** | 0.0 |
+
+Acceptance was hidden_mae < 0.015 AND hidden_hit5 > 0.90 — **neither met**.
+
+- hidden_mae 0.0246 sits in the pre-registered 0.025–0.04 "do not launch" band;
+  still creeping down (−0.005 over the last 5k) but decelerating, extrapolating
+  to ~0.02, not <0.015.
+- hidden_hit5 0.455 is the decisive blocker: after 30k steps overfitting a
+  *single image*, less than half the hidden pixels are within 5/255, rising
+  only ~0.04 per 5k and decelerating. 0.90 is effectively unreachable here.
+- obs_passthrough = 0 throughout (copy intact; math clean).
+
+The error is bimodal — flat regions near-perfect, edge/detail pixels badly off —
+so MAE looks tolerable while hit5 collapses. MAE can keep creeping down while
+the high-frequency pixels stay wrong.
+
+### Key conclusion
+
+The current V7Completer is a useful diagnostic baseline, but it is **not an
+adequate hidden-region generator**. It learns low-frequency structure but not
+pixel-crisp high-frequency detail, even for a one-image MAIN overfit. This is
+an architecture/representation ceiling, not a data, curriculum, or
+training-budget problem: it appears in the cheapest possible controlled case
+(one file, one skin, 30k overfit), so scaling the same recipe (c64, more skins,
+longer Kaggle runs) will not fix it.
+
+### Next action: pause for an architecture decision
+
+Do not scale the same U-Net. The next design must explicitly target
+high-frequency reconstruction — candidates (to be chosen deliberately, not via
+another ad hoc training loop):
+- stronger per-pixel coordinate representation (more Fourier bands / learned
+  positional codes) so sharp features can be addressed;
+- a final-resolution refinement stage on the generated branch;
+- a copy / patch / retrieval path from observed pixels (V6-style or attention
+  over observed evidence) rather than pure feed-forward synthesis.
+
