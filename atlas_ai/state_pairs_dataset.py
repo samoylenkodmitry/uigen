@@ -129,10 +129,11 @@ class StatePairsDataset(Dataset):
                         if not self.include_identity and i == j:
                             continue
                         self.items.append((sid, fam.family_id, i, j))
-        # Batch grouping key: (file, family) so every batch shares frame size.
-        self.group_keys: list[tuple[str, str]] = [
-            (self.alt_families[fid].file_name, self.alt_families[fid].family)
-            for (_sid, fid, _i, _j) in self.items
+        # Batch grouping key: unique family_key (file/family) so every batch
+        # shares one frame size and the key matches family_key used in eval /
+        # --only-family filters.
+        self.group_keys: list[str] = [
+            self.alt_families[fid].key for (_sid, fid, _i, _j) in self.items
         ]
 
     def __len__(self) -> int:

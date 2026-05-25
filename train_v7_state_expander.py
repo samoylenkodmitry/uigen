@@ -133,6 +133,9 @@ def main() -> int:
                         "relative to transition pairs (weight 1.0). Low by default "
                         "so S1 trains transitions; residual-from-source already "
                         "handles copying unchanged content. Ignored with --no-identity.")
+    p.add_argument("--only-family", default=None,
+                   help="Restrict training to one family_key (e.g. 'CBUTTONS/play') "
+                        "for single-family overfit diagnostics.")
     p.add_argument("--checkpoint-every", type=int, default=2000)
     p.add_argument("--snapshot-every", type=int, default=0)
     p.add_argument("--progress-every", type=int, default=200)
@@ -170,9 +173,16 @@ def main() -> int:
     item_weights = [
         (args.identity_weight if i == j else 1.0) for (_sid, _fid, i, j) in ds.items
     ]
+    key_weights = None
+    if args.only_family:
+        all_keys = {f.key for f in ds.alt_families}
+        if args.only_family not in all_keys:
+            raise SystemExit(f"--only-family {args.only_family!r} not in {sorted(all_keys)}")
+        key_weights = {k: (1.0 if k == args.only_family else 0.0) for k in all_keys}
+        print(f"--only-family: restricting to {args.only_family}", flush=True)
     sampler = WeightedSameKeyBatchSampler(
         ds.group_keys, batch_size=args.batch, num_batches=args.steps,
-        item_weights=item_weights, generator=generator,
+        key_weights=key_weights, item_weights=item_weights, generator=generator,
     )
     loader = DataLoader(ds, batch_sampler=sampler, num_workers=args.num_workers,
                         collate_fn=default_collate)

@@ -83,7 +83,7 @@ def test_group_keys_match_items_and_batch_size():
     fid = next(f.family_id for f in ds.alt_families
                if (f.file_name, f.family) == ("VOLUME.bmp", "slider_frames"))
     i = next(i for i, (s, f, a, b) in enumerate(ds.items) if f == fid)
-    assert ds.group_keys[i] == ("VOLUME.bmp", "slider_frames")
+    assert ds.group_keys[i] == "VOLUME/slider_frames"
 
 
 def test_samekey_sampler_batches_share_key_and_cover_all():
