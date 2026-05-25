@@ -26,6 +26,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data._utils.collate import default_collate
 
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -326,12 +327,27 @@ def main() -> int:
         sampler = SameFileBatchSampler(
             dataset.items, batch_size=args.batch, shuffle=True, generator=generator,
         )
-    loader = DataLoader(
-        dataset,
-        batch_sampler=sampler,
-        num_workers=args.num_workers,
-        pin_memory=args.pin_memory and device.type == "cuda",
-    )
+    if args.sampling_mode == "weighted":
+        # WeightedSameFileBatchSampler intentionally reuses the same
+        # (skin,file) index many times. Build each batch after setting the
+        # per-step mask epoch so __getitem__ sees the fresh RNG stream.
+        # A normal DataLoader would fetch the batch before the training loop
+        # can call dataset.set_epoch(step), and worker copies would not see
+        # subsequent set_epoch() calls at all.
+        loader = None
+        if args.num_workers:
+            print(
+                "weighted sampling uses direct indexed collation so masks "
+                f"can change every step; ignoring --num-workers={args.num_workers}",
+                flush=True,
+            )
+    else:
+        loader = DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_memory and device.type == "cuda",
+        )
     support_masks = load_support_masks()
 
     num_skins = len(dataset.skin_ids) if args.skin_embedding_dim > 0 else 0
@@ -458,18 +474,29 @@ def main() -> int:
           f"progress_every={progress_every}", flush=True)
     with metrics_path.open("w", encoding="utf-8") as metrics_file:
         while step < args.steps:
-            dataset.set_epoch(epoch)
-            for batch in loader:
+            if weighted_mode:
+                batch_iter = iter(sampler)
+            else:
+                dataset.set_epoch(epoch)
+                assert loader is not None
+                batch_iter = iter(loader)
+            for batch_or_indices in batch_iter:
                 if step >= args.steps:
                     break
                 if stop_after_seconds > 0 and (_time.monotonic() - start_time) >= stop_after_seconds:
                     stopped_by_time = True
                     break
-                # Weighted sampling samples each file with replacement: the
-                # same (skin, file) index can recur many times in one run.
-                # Vary dataset.epoch per step so masks stay fresh.
                 if weighted_mode:
+                    # Weighted sampling samples each file with replacement:
+                    # the same (skin, file) index can recur many times in one
+                    # run. Vary dataset.epoch before __getitem__ so masks stay
+                    # fresh for the current batch.
                     dataset.set_epoch(step)
+                    batch = default_collate([
+                        dataset[int(idx)] for idx in batch_or_indices
+                    ])
+                else:
+                    batch = batch_or_indices
                 optimizer.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda", enabled=args.amp and device.type == "cuda"):
                     losses = compute_step_loss(
