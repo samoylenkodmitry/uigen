@@ -1,147 +1,339 @@
-# Message For Claude: Stop V6 Tuning, Plan V7 Unified Copy + Complete
+# Message For Claude: Clean V7 Phase 0 Before Any More Training
 
-Codex reviewed the GPT-5.5 Pro feedback and agrees with the core direction.
-
-Do **not** continue same-recipe V6 Stage 2 tuning. Do **not** scale current V6
-to multi-skin or rented GPU. V6 proved the correspondence mechanism, but the
-current copy/refine architecture did not clear copy quality.
-
-Current final V6 conclusions are in:
+Codex reviewed the latest GPT-5.5 Pro feedback against the current repo.
+I agree with the core correction:
 
 ```text
-v6_conclusions.md
-REPORT_V6_STAGE2_DEFAULT_SKIN.md
+Do not run another long Gate B training job yet.
+The current V7 Phase 0 failure is still contaminated by task-definition,
+metric, and mask-semantics issues.
 ```
 
-Best V6 checkpoint:
+Current baseline report:
 
 ```text
-runs/slotnet_v6_default_skin_stage2_p4residual/snapshot_step005000.safetensors
+v7_attempt_report.md
 ```
 
-Best V6 metrics:
+Latest pushed commit:
 
 ```text
-uv_median_px   0.63    target < 2.0    PASS
-copy_conf_auc  0.9707  target > 0.98   near miss
-visible_mae    0.0185  target < 0.01   PARTIAL / FAIL
+ffdae89 Document V7 attempt and fix weighted mask seeding
 ```
 
-## Decision
-
-Move to V7 design. V7 should be one deployed model, one checkpoint, one
-inference call:
+That commit also fixes the weighted-sampler mask RNG bug:
 
 ```text
-input image -> SlotNetV7Unified -> exported BMP tensors -> .wsz
+weighted mode now sets dataset.set_epoch(step) before __getitem__
 ```
 
-But internally it needs two functions:
+## Current Interpretation
+
+Do not claim that V7 completer architecture has cleanly failed yet.
+
+What is proven:
 
 ```text
-1. Observer/copy: locate and preserve visible source evidence.
-2. Completer: synthesize hidden sprite states using a learned skin prior.
+1. One-skin V7 completer can pass.
+2. Multi-skin V7 completer still fails.
+3. Hard files can pass in isolation when they receive enough gradient.
+4. Skin embedding helps, but it is oracle conditioning, not deployable.
+5. At least one previous training-loop bug was found late.
+6. POSBAR state_family semantics are likely wrong.
+7. Current loss/eval denominator is not hidden-normalized.
 ```
 
-This is not two production models. Staged training and auxiliary losses are
-allowed, but inference must remain one graph.
+Therefore the next work is cleanup and re-eval, not more Kaggle training.
 
-## Do Not Do
+## Stop Conditions
+
+Do **not** launch another long local/Kaggle run until all of this is done:
 
 ```text
-Do not build another pure generator.
-Do not build a pure V6 copy-only model.
-Do not rely on render variants to expose all hidden states.
-Do not reintroduce prior/default atlas inputs.
-Do not use distortion JSON side channels.
-Do not use padded full-atlas loss/metrics as acceptance.
-Do not scale V6 as-is.
+1. hidden-normalized losses/metrics implemented
+2. state-family mask roles implemented
+3. POSBAR no longer treated as track-vs-thumb sibling alternatives
+4. tests prove the semantics
+5. existing Phase B checkpoint re-evaluated under corrected metrics
 ```
 
-## Immediate Next Work
+## Task 1: Hidden-Normalized Losses And Metrics
 
-Before implementing a full V7 model, prepare the design scaffolding:
+Current V7 loss is support-normalized:
 
-1. Read `PLAN_V7_UNIFIED.md`.
-2. Audit Cranamp state-sheet structure for the trainable exported BMPs.
-3. Add a state-family metadata config for files like:
+```python
+support_masked_l1_loss(final_rgb, target_rgb, support_mask)
+```
+
+Because the model hard-copies observed pixels:
+
+```python
+final_rgb = observed_mask * observed_rgb + (1 - observed_mask) * generated_rgb
+```
+
+the numerator only has error on hidden pixels, but the denominator is still all
+supported pixels. Mostly-observed samples therefore get diluted loss.
+
+Add hidden-normalized functions to `models/losses_v7.py`.
+
+Definitions:
+
+```python
+support = support_mask
+observed = observed_mask * support
+hidden = (1 - observed_mask) * support
+```
+
+Primary train/eval metrics:
 
 ```text
-VOLUME.bmp
-BALANCE.bmp
-CBUTTONS.bmp
-SHUFREP.bmp
-POSBAR.bmp
+hidden_supported_mae
+hidden_hit5
+hidden_sobel_mae
+observed_passthrough_mae
+full_supported_mae   # debug/secondary only
+full_supported_hit5  # debug/secondary only
 ```
 
-4. Build the asset-completion dataset/mask generator. This is the next useful
-   code task.
-
-The completion dataset should train:
+Training loss should become:
 
 ```text
-partial exported BMP evidence + observed mask + coords + file id
--> full clean exported BMP
+L = 1.00 * hidden_l1
+  + 1.00 or 1.50 * hidden_sobel
+  + 0.05 * full_supported_l1
 ```
 
-Mask recipes:
+If `hidden.sum() == 0`, skip that sample for the primary hidden loss or count
+it only as a passthrough diagnostic.
+
+Required tests:
 
 ```text
-40% true render masks from final-frame provenance
-35% state-family masks: reveal one state/frame, hide sibling states
-20% random rectangle/stripe masks
- 5% whole-file dropout
+1. all-observed mask has zero hidden denominator and does not dilute loss
+2. half-hidden sample normalizes by hidden pixels only
+3. hard-copied observed pixels do not make hidden_mae look better
+4. hidden_hit5 denominator is hidden pixel count, not support count
+5. per-item hidden metrics work for same-file batches
 ```
 
-Do not start a long V7 training run until asset-completion and observer-copy
-small gates are implemented and passing.
+## Task 2: Add `mask_role` To State Families
 
-## V7 Gates
+Current `state_family` mask logic hides siblings whenever a family has two or
+more rectangles. That is only correct for true alternatives.
 
-Use these as the first acceptance sequence:
+Extend `configs/state_families_classic.yaml` and `atlas_ai/state_families.py`
+with:
+
+```yaml
+mask_role: alternatives | components | single
+```
+
+Rules:
 
 ```text
-Gate A: asset-completion one-skin
-  MAE < 0.005
-  hit5 > 0.95
+alternatives:
+  reveal one rect/frame, hide sibling rects/frames
 
-Gate B: asset-completion 16-skin
-  retrieval top1 = 1.0
-  median MAE < 0.015
-  hit5 > 0.90
+components:
+  these rects are complementary parts, not alternate states
+  state_family masking must not hide siblings
 
-Gate C: observer-copy one-skin
-  visible MAE < 0.01
-  AUC > 0.98
-  UV p50 < 1 px
-  UV p90 < 3 px
-  UV p95 < 5 px
-
-Gate D: connected one-skin
-  final exported MAE < 0.01
-  hit5 > 0.90
-
-Gate E: hard-skin mini-gate
-  tvxq
-  zelda
-  a_halo_so_bright_it_bleeds
-  dragonzv30amp
-  blair_razor_project
+single:
+  no state-family hiding
 ```
 
-Focus hard-skin scoring on:
+`StateRect` should carry `mask_role` so `atlas_ai/v7_masks.py` can filter.
+
+`make_state_family_mask()` must only sample families where:
+
+```python
+mask_role == "alternatives"
+```
+
+If no alternatives exist for a file, state_family should fall back to
+all-observed or be redistributed explicitly. Make the behavior visible in logs
+and tests.
+
+## Task 3: Correct Classic Roles
+
+Use these initial role assignments.
+
+True alternatives:
 
 ```text
-MAIN
-EQMAIN
-PLEDIT
-VOLUME
-BALANCE
-CBUTTONS
+CBUTTONS.bmp:
+  each button pressed/unpressed family
+
+SHUFREP.bmp:
+  repeat on/off
+  shuffle on/off
+  eq_toggle on/off
+
+MONOSTER.bmp:
+  mono/stereo indicators
+
+PLAYPAUS.bmp:
+  status frames
+
+VOLUME.bmp:
+  slider_frames
+
+BALANCE.bmp:
+  slider_frames
+
+EQMAIN.bmp:
+  slider_frames
+  on_button off/on
+  auto_button off/on
 ```
 
-## Current Recommendation
+Components / not state alternatives:
 
-Start with the state-family metadata and asset-completion scaffolding. That is
-the most direct way to test the part V6 cannot solve: hidden sprite states.
+```text
+MAIN.bmp:
+  panel
 
+TITLEBAR.bmp:
+  title_strip
+  corner_buttons
+
+PLEDIT.bmp:
+  title_bar
+  side_borders
+  footer
+  scrollbar_thumb
+
+POSBAR.bmp:
+  track
+  thumb
+
+VOLUME.bmp:
+  thumb
+
+BALANCE.bmp:
+  thumb
+
+EQMAIN.bmp:
+  chrome
+  presets_label
+  slider_thumb
+```
+
+The important one:
+
+```text
+POSBAR track and thumb are NOT sibling states.
+Do not train/evaluate "track from thumb only" as a state-family task.
+```
+
+## Task 4: Regression Tests For Mask Semantics
+
+Add tests before any training.
+
+Required cases:
+
+```text
+POSBAR state_family must not hide track from thumb or thumb from track.
+PLEDIT footer_left/footer_right must not be treated as alternatives.
+EQMAIN chrome pieces must not be treated as alternatives.
+TITLEBAR corner buttons must not be treated as alternatives.
+CBUTTONS play pressed/unpressed must still hide one state from the other.
+VOLUME/BALANCE slider_frames must still reveal one frame and hide siblings.
+EQMAIN slider_frames must still reveal one of 28 and hide the other 27.
+```
+
+## Task 5: Re-Evaluate Existing Checkpoints First
+
+After Tasks 1-4:
+
+```text
+Do not train first.
+```
+
+Re-evaluate the existing best Phase B checkpoint under corrected masks and
+hidden-normalized metrics.
+
+Report:
+
+```text
+full_supported_mae / hit5
+hidden_supported_mae / hit5
+per-file hidden metrics
+per-skin hidden metrics
+per-mode hidden metrics
+observed_passthrough_mae
+```
+
+The point is to answer:
+
+```text
+Was the reported Gate B failure partly caused by invalid POSBAR masks and
+support-normalized denominators?
+```
+
+## Task 6: Only Then Run A Short Sanity Train
+
+If re-eval still fails, run a short corrected Gate B sanity train:
+
+```text
+2k-5k steps
+oracle skin embedding ON
+hidden-normalized loss
+corrected mask roles
+no long Kaggle run
+```
+
+Continue only if hidden metrics move in the expected direction.
+
+## Longer-Term Validation Ladder
+
+After the cleanup:
+
+```text
+Gate 0: direct hidden tensor optimization
+  proves loss/eval code can reach near-zero
+
+Gate A: one-skin completer
+  hidden_supported_mae < 0.005-0.01
+  hidden_hit5 > 0.95
+
+Gate B: 14/16-skin oracle completer
+  oracle skin_id allowed
+  hidden_supported_mae < 0.015
+  hidden_hit5 > 0.90
+
+Gate C: replace oracle skin_id with deployable context encoder
+  observed files/masks -> z_skin
+
+Gate D: observer/copy branch
+  render image -> observed BMP evidence
+
+Gate E: unified end-to-end
+  image -> observer -> context/completer -> BMPs
+```
+
+## What Not To Do
+
+```text
+Do not run another 5-hour probe to test a semantic question.
+Do not train before re-evaluating existing checkpoints.
+Do not treat skin_id embedding as final deployable conditioning.
+Do not decide c48/c64 architecture from contaminated metrics.
+Do not reintroduce full-atlas metrics, priors, unsupported files, or
+distortion metadata side channels.
+```
+
+## Expected Deliverable
+
+First deliverable should be code/tests only:
+
+```text
+1. hidden-normalized loss/metric functions
+2. mask_role schema + loader support
+3. corrected classic roles
+4. mask-semantics regression tests
+5. eval script updated to report hidden metrics
+6. no training launched
+```
+
+Then pause for review.
