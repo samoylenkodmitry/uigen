@@ -37,6 +37,11 @@ from atlas_ai.support_mask import load_support_masks
 from atlas_ai.v7_batching import SameFileBatchSampler, WeightedSameFileBatchSampler
 from atlas_ai.v7_masks import V7MaskWeights
 from models.losses_v7 import (
+    hidden_supported_l1_loss,
+    hidden_supported_l1_per_item,
+    hidden_supported_sobel_mae,
+    hidden_supported_sobel_mae_per_item,
+    observed_passthrough_mae,
     support_masked_l1_loss,
     support_masked_l1_per_item,
     support_masked_sobel_mae,
@@ -133,6 +138,7 @@ def compute_step_loss(
     device: torch.device,
     *,
     sobel_weight: float = 0.0,
+    full_supported_weight: float = 0.05,
 ) -> dict[str, torch.Tensor]:
     observed_rgb = batch["observed_rgb"].to(device, non_blocking=True)
     observed_mask = batch["observed_mask"].to(device, non_blocking=True)
@@ -163,19 +169,39 @@ def compute_step_loss(
         skin_id_tensor = skin_index.to(device=device, dtype=torch.long)
     final_rgb = model(observed_rgb, observed_mask, file_id, skin_id=skin_id_tensor)
     support = support_masks[file_name].to(device=device, dtype=final_rgb.dtype)
-    l1 = support_masked_l1_loss(final_rgb, target_rgb, support)
-    l1_per_item = support_masked_l1_per_item(final_rgb, target_rgb, support)
-    out = {"l1": l1.detach()}
+    # Primary loss is hidden-normalized: it scores only the pixels the model
+    # actually generates (hidden = (1 - observed) * support). The full-supported
+    # L1 is kept as a small anchor and as a debug metric — on its own it
+    # dilutes mostly-observed samples because the observed pixels are hard
+    # copies of the target.
+    hidden_l1 = hidden_supported_l1_loss(final_rgb, target_rgb, observed_mask, support)
+    hidden_l1_per_item, _has_hidden = hidden_supported_l1_per_item(
+        final_rgb, target_rgb, observed_mask, support,
+    )
+    full_l1 = support_masked_l1_loss(final_rgb, target_rgb, support)
+    full_l1_per_item = support_masked_l1_per_item(final_rgb, target_rgb, support)
+    total = hidden_l1 + full_supported_weight * full_l1
+    total_per_item = hidden_l1_per_item + full_supported_weight * full_l1_per_item
+    out = {
+        "l1": hidden_l1.detach(),          # primary (hidden-normalized) L1
+        "hidden_l1": hidden_l1.detach(),
+        "full_l1": full_l1.detach(),       # debug / secondary
+    }
     if sobel_weight > 0.0:
-        sobel = support_masked_sobel_mae(final_rgb, target_rgb, support)
-        sobel_per_item = support_masked_sobel_mae_per_item(final_rgb, target_rgb, support)
-        total = l1 + sobel_weight * sobel
-        total_per_item = l1_per_item + sobel_weight * sobel_per_item
-        out["sobel"] = sobel.detach()
+        hidden_sobel = hidden_supported_sobel_mae(final_rgb, target_rgb, observed_mask, support)
+        hidden_sobel_per_item, _ = hidden_supported_sobel_mae_per_item(
+            final_rgb, target_rgb, observed_mask, support,
+        )
+        total = total + sobel_weight * hidden_sobel
+        total_per_item = total_per_item + sobel_weight * hidden_sobel_per_item
+        out["sobel"] = hidden_sobel.detach()
     else:
-        total = l1
-        total_per_item = l1_per_item
         out["sobel"] = torch.zeros((), device=device)
+    # Diagnostic: with the hard copy intact this is ~0; a non-zero value means
+    # the observed-pixel passthrough is broken.
+    out["obs_passthrough"] = observed_passthrough_mae(
+        final_rgb, target_rgb, observed_mask, support,
+    ).detach()
     out["total"] = total
     out["total_per_item"] = total_per_item.detach()
     return out
@@ -232,9 +258,13 @@ def main() -> int:
                              "seed the model. Steps restart at 0; the new --out is "
                              "independent of the source run.")
     parser.add_argument("--sobel-weight", type=float, default=0.0,
-                        help="Edge-precision loss weight. When >0, training total = "
-                             "l1 + sobel_weight * support_masked_sobel_mae. Default 0 "
-                             "keeps the historical L1-only recipe.")
+                        help="Edge-precision loss weight. When >0, training total adds "
+                             "sobel_weight * hidden_supported_sobel_mae. Default 0 keeps "
+                             "the L1-only recipe.")
+    parser.add_argument("--full-supported-weight", type=float, default=0.05,
+                        help="Weight on the full-supported L1 anchor term. The primary "
+                             "loss is hidden-normalized; this small term keeps the "
+                             "observed-pixel copy honest. Set 0 to drop it.")
     parser.add_argument("--pixel-hit-weight", type=float, default=0.0,
                         help="Reserved for a future pixel-margin loss attacking pixels "
                              "just over the 5/255 hit5 threshold. Not yet implemented.")
@@ -502,6 +532,7 @@ def main() -> int:
                     losses = compute_step_loss(
                         model, batch, support_masks, device,
                         sobel_weight=args.sobel_weight,
+                        full_supported_weight=args.full_supported_weight,
                     )
                 if args.amp and device.type == "cuda":
                     scaler.scale(losses["total"]).backward()

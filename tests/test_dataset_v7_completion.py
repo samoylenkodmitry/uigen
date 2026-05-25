@@ -212,11 +212,15 @@ def test_state_family_mode_hides_eqmain_siblings_across_rows():
 
 
 def test_mode_distribution_matches_weights_when_provenance_provided():
-    """4000 draws should be within 4% of the V7 plan weights."""
+    """4000 draws on a file WITH alternatives should track the plan weights.
+
+    The draw is restricted to VOLUME.bmp because the plan mix only holds for
+    files that have an `alternatives` family; files without one redistribute
+    their state_family share (see the POSBAR test below).
+    """
     weights = V7MaskWeights()
     # Build a tiny provenance pool so the provenance mode is available; one
     # entry per trainable file at the right (h, w).
-    spec_by_name = {s.file_name: s for s in TRAINABLE_EXPORT_SPECS}
     pools = {
         s.file_name: [np.ones((s.h, s.w), dtype=np.uint8)]
         for s in TRAINABLE_EXPORT_SPECS
@@ -227,11 +231,13 @@ def test_mode_distribution_matches_weights_when_provenance_provided():
         provenance_pools=pools,
         mask_weights=weights,
     )
+    vol_indices = [i for i, (_sid, fn) in enumerate(ds.items) if fn == "VOLUME.bmp"]
+    assert vol_indices
     counts: Counter[str] = Counter()
     n = 4000
     rng = np.random.default_rng(0)
     for _ in range(n):
-        index = int(rng.integers(0, len(ds)))
+        index = vol_indices[int(rng.integers(0, len(vol_indices)))]
         ds.seed = int(rng.integers(0, 2**31 - 1))
         counts[ds[index]["mode"]] += 1
     expected = {
@@ -243,6 +249,34 @@ def test_mode_distribution_matches_weights_when_provenance_provided():
     for mode, want in expected.items():
         got = counts[mode] / n
         assert abs(got - want) < 0.04, f"{mode}: expected {want:.2f} got {got:.3f}"
+
+
+def test_no_alternatives_file_redistributes_state_family_mode():
+    """POSBAR has no `alternatives` family, so the dataset must never emit a
+    state_family mode for it — that weight is redistributed to the other
+    modes rather than producing no-op all-ones masks."""
+    weights = V7MaskWeights()
+    pools = {
+        s.file_name: [np.ones((s.h, s.w), dtype=np.uint8)]
+        for s in TRAINABLE_EXPORT_SPECS
+    }
+    ds = V7CompletionDataset(
+        skin_sources={"default": DEFAULT_SKIN},
+        state_families_path=CONFIG,
+        provenance_pools=pools,
+        mask_weights=weights,
+    )
+    posbar_indices = [i for i, (_sid, fn) in enumerate(ds.items) if fn == "POSBAR.bmp"]
+    assert posbar_indices
+    counts: Counter[str] = Counter()
+    rng = np.random.default_rng(0)
+    for _ in range(2000):
+        index = posbar_indices[int(rng.integers(0, len(posbar_indices)))]
+        ds.seed = int(rng.integers(0, 2**31 - 1))
+        counts[ds[index]["mode"]] += 1
+    assert counts["state_family"] == 0
+    assert counts["provenance"] > 0
+    assert counts["random_rect"] > 0
 
 
 def test_dataset_deterministic_with_fixed_seed():

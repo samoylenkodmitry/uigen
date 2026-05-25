@@ -12,6 +12,16 @@
 #     spaced (e.g. CBUTTONS unpressed/pressed pairs, TITLEBAR corner buttons,
 #     EQMAIN chrome regions).
 #
+# Every family MUST declare a mask_role, which decides whether state_family
+# masking may hide siblings:
+#
+#   alternatives - mutually exclusive states; reveal one rect/frame and hide
+#                  the rest. This is the only role state_family masks act on.
+#   components   - complementary parts of one assembled image. NEVER hidden
+#                  from one another (e.g. POSBAR track+thumb, EQMAIN chrome,
+#                  PLEDIT footer halves, TITLEBAR corner buttons).
+#   single       - one rectangle; nothing to alternate.
+#
 # Coordinates are pixel offsets inside the source BMP. They must fit inside
 # the file's TRAINABLE_EXPORT_SPECS rectangle.
 #
@@ -23,6 +33,7 @@ files:
   MAIN.bmp:
     families:
       - name: panel
+        mask_role: components
         kind: sprite
         rects:
           - {name: full, x: 0, y: 0, w: 275, h: 115}
@@ -30,10 +41,13 @@ files:
   TITLEBAR.bmp:
     families:
       - name: title_strip
+        mask_role: components
         kind: sprite
         rects:
           - {name: active, x: 27, y: 0, w: 275, h: 14}
       - name: corner_buttons
+        # Distinct buttons, not alternate states of one button.
+        mask_role: components
         kind: sprite
         rects:
           - {name: minimize,  x:  0, y:  0, w: 9, h: 9}
@@ -47,31 +61,37 @@ files:
       # at y=0..17, pressed at y=18..35). Eject is shorter (16 px) at the
       # rightmost column.
       - name: prev
+        mask_role: alternatives
         kind: button_state_sheet
         rects:
           - {name: unpressed, x:  0, y:  0, w: 23, h: 18}
           - {name: pressed,   x:  0, y: 18, w: 23, h: 18}
       - name: play
+        mask_role: alternatives
         kind: button_state_sheet
         rects:
           - {name: unpressed, x: 23, y:  0, w: 23, h: 18}
           - {name: pressed,   x: 23, y: 18, w: 23, h: 18}
       - name: pause
+        mask_role: alternatives
         kind: button_state_sheet
         rects:
           - {name: unpressed, x: 46, y:  0, w: 23, h: 18}
           - {name: pressed,   x: 46, y: 18, w: 23, h: 18}
       - name: stop
+        mask_role: alternatives
         kind: button_state_sheet
         rects:
           - {name: unpressed, x: 69, y:  0, w: 23, h: 18}
           - {name: pressed,   x: 69, y: 18, w: 23, h: 18}
       - name: next
+        mask_role: alternatives
         kind: button_state_sheet
         rects:
           - {name: unpressed, x:  92, y:  0, w: 22, h: 18}
           - {name: pressed,   x:  92, y: 18, w: 22, h: 18}
       - name: eject
+        mask_role: alternatives
         kind: button_state_sheet
         rects:
           - {name: unpressed, x: 114, y:  0, w: 22, h: 16}
@@ -80,24 +100,28 @@ files:
   SHUFREP.bmp:
     families:
       - name: repeat
+        mask_role: alternatives
         kind: toggle_state_sheet
         rects:
           - {name: off, x: 0, y:  0, w: 28, h: 15}
           - {name: on,  x: 0, y: 30, w: 28, h: 15}
       - name: shuffle
+        mask_role: alternatives
         kind: toggle_state_sheet
         rects:
           - {name: off, x: 28, y:  0, w: 47, h: 15}
           - {name: on,  x: 28, y: 30, w: 47, h: 15}
       - name: eq_toggle
+        mask_role: alternatives
         kind: toggle_state_sheet
         rects:
           - {name: off, x: 0, y: 61, w: 23, h: 12}
           - {name: on,  x: 0, y: 73, w: 23, h: 12}
       - name: pl_toggle
-        kind: toggle_state_sheet
         # Only one state is sampled by the renderer; described here as a
         # single-state family so the completer treats it as a unit.
+        mask_role: single
+        kind: toggle_state_sheet
         rects:
           - {name: pl, x: 23, y: 73, w: 23, h: 12}
 
@@ -107,6 +131,7 @@ files:
       # y=12..23). The current renderer always samples (0, 0, 56, 12); the
       # underlying BMP supports both states.
       - name: indicators
+        mask_role: alternatives
         kind: vertical_strip
         frame_axis: y
         frame_count: 2
@@ -123,6 +148,7 @@ files:
       # (typically "not playing" and an alt). We declare the three the
       # renderer uses so masks line up with provenance.
       - name: status
+        mask_role: alternatives
         kind: horizontal_strip
         frame_axis: x
         frame_count: 3
@@ -135,6 +161,8 @@ files:
   EQMAIN.bmp:
     families:
       - name: chrome
+        # Panel/title/close/preset band are assembled together, not alternates.
+        mask_role: components
         kind: sprite
         rects:
           - {name: main_panel,   x:  0, y:   0, w: 275, h: 116}
@@ -142,20 +170,24 @@ files:
           - {name: close_button, x:  0, y: 116, w:   9, h:   9}
           - {name: preset_band,  x: 86, y:  17, w: 113, h:  19}
       - name: on_button
+        mask_role: alternatives
         kind: toggle_state_sheet
         rects:
           - {name: off, x: 10, y: 119, w: 26, h: 12}
           - {name: on,  x: 69, y: 119, w: 26, h: 12}
       - name: auto_button
+        mask_role: alternatives
         kind: toggle_state_sheet
         rects:
           - {name: off, x: 36, y: 119, w: 32, h: 12}
           - {name: on,  x: 95, y: 119, w: 32, h: 12}
       - name: presets_label
+        mask_role: components
         kind: sprite
         rects:
           - {name: presets, x: 224, y: 164, w: 44, h: 12}
       - name: slider_thumb
+        mask_role: components
         kind: sprite
         rects:
           - {name: thumb, x: 0, y: 164, w: 11, h: 11}
@@ -164,6 +196,7 @@ files:
         # in the first row, frames 14..27 in the second row. Keep them in one
         # family so state-family masks reveal one frame and hide all 27
         # siblings, not only siblings from the same row.
+        mask_role: alternatives
         kind: sprite
         rects:
           - {name: frame_00, x:  13, y: 164, w: 14, h: 63}
@@ -198,6 +231,9 @@ files:
   PLEDIT.bmp:
     families:
       - name: title_bar
+        # Left cap / middle fill / repeat segment / right cap are assembled
+        # side by side, not alternate states.
+        mask_role: components
         kind: sprite
         rects:
           - {name: title_left,   x:   0, y: 21, w:  25, h: 20}
@@ -205,23 +241,30 @@ files:
           - {name: title_repeat, x: 127, y: 21, w:  25, h: 20}
           - {name: title_right,  x: 153, y: 21, w:  25, h: 20}
       - name: side_borders
+        mask_role: components
         kind: sprite
         rects:
           - {name: left,  x:  0, y: 42, w: 12, h: 29}
           - {name: right, x: 31, y: 42, w: 20, h: 29}
       - name: footer
+        mask_role: components
         kind: sprite
         rects:
           - {name: footer_left,  x:   0, y: 72, w: 125, h: 38}
           - {name: footer_right, x: 126, y: 72, w: 150, h: 38}
       - name: scrollbar_thumb
+        mask_role: components
         kind: sprite
         rects:
           - {name: thumb, x: 52, y: 53, w: 8, h: 18}
 
   POSBAR.bmp:
     families:
+      # track and thumb are complementary parts of the seek bar, NOT sibling
+      # states. They must never be hidden from one another by state_family
+      # masking (that was the V7 Phase 0 POSBAR bug).
       - name: parts
+        mask_role: components
         kind: sprite
         rects:
           - {name: track, x:   0, y: 0, w: 248, h: 10}
@@ -231,6 +274,7 @@ files:
     families:
       - name: slider_frames
         # 28 horizontal slider frames stacked vertically, pitch=15, frame_h=13.
+        mask_role: alternatives
         kind: vertical_strip
         frame_axis: y
         frame_count: 28
@@ -240,6 +284,7 @@ files:
         y: 0
         pitch: 15
       - name: thumb
+        mask_role: components
         kind: sprite
         rects:
           - {name: thumb, x: 15, y: 422, w: 14, h: 11}
@@ -247,6 +292,7 @@ files:
   BALANCE.bmp:
     families:
       - name: slider_frames
+        mask_role: alternatives
         kind: vertical_strip
         frame_axis: y
         frame_count: 28
@@ -256,6 +302,7 @@ files:
         y: 0
         pitch: 15
       - name: thumb
+        mask_role: components
         kind: sprite
         rects:
           - {name: thumb, x: 15, y: 422, w: 14, h: 11}

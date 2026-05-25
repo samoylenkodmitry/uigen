@@ -34,6 +34,15 @@ from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
 EXPLICIT_KINDS = {"sprite", "button_state_sheet", "toggle_state_sheet"}
 STRIP_KINDS = {"horizontal_strip", "vertical_strip"}
 
+# How a family's rectangles relate to each other, which decides whether
+# state_family masking may hide siblings:
+#   alternatives - mutually exclusive states; reveal one, hide the rest
+#                  (CBUTTONS pressed/unpressed, slider frames, on/off toggles)
+#   components   - complementary parts of one assembled image; never hide a
+#                  sibling (POSBAR track+thumb, EQMAIN chrome, PLEDIT footer)
+#   single       - one rectangle, nothing to alternate
+MASK_ROLES = ("alternatives", "components", "single")
+
 
 @dataclass(frozen=True)
 class StateRect:
@@ -45,11 +54,18 @@ class StateRect:
     y: int
     w: int
     h: int
+    mask_role: str = "single"
 
 
 def _expand_family(file_name: str, family: dict) -> list[StateRect]:
     family_name = family["name"]
     kind = family["kind"]
+    mask_role = family.get("mask_role")
+    if mask_role not in MASK_ROLES:
+        raise ValueError(
+            f"{file_name}/{family_name}: mask_role must be one of "
+            f"{'|'.join(MASK_ROLES)}, got {mask_role!r}"
+        )
     if kind in EXPLICIT_KINDS:
         rects = family.get("rects") or []
         if not rects:
@@ -63,6 +79,7 @@ def _expand_family(file_name: str, family: dict) -> list[StateRect]:
                 y=int(r["y"]),
                 w=int(r["w"]),
                 h=int(r["h"]),
+                mask_role=mask_role,
             )
             for r in rects
         ]
@@ -95,6 +112,7 @@ def _expand_family(file_name: str, family: dict) -> list[StateRect]:
                 family=family_name,
                 name=f"frame_{k:02d}",
                 x=rx, y=ry, w=frame_w, h=frame_h,
+                mask_role=mask_role,
             ))
         return out
     raise ValueError(f"{file_name}/{family_name}: unknown kind {kind!r}")
@@ -169,4 +187,4 @@ def group_by_family(rects: list[StateRect]) -> dict[str, list[StateRect]]:
 
 
 __all__ = ["StateRect", "load_state_families", "group_by_family",
-           "EXPLICIT_KINDS", "STRIP_KINDS"]
+           "EXPLICIT_KINDS", "STRIP_KINDS", "MASK_ROLES"]

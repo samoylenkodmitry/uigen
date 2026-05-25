@@ -79,27 +79,43 @@ def make_provenance_mask(
     return mask.astype(np.uint8)
 
 
+def _alternatives_families(rects: list[StateRect]) -> dict[str, list[StateRect]]:
+    """Families eligible for sibling-hiding: mask_role == 'alternatives' with
+    two or more rects. `components`/`single` families are excluded so we never
+    treat complementary parts (POSBAR track+thumb, EQMAIN chrome, TITLEBAR
+    corner buttons) as mutually exclusive states."""
+    grouped = group_by_family(rects)
+    return {
+        name: rs for name, rs in grouped.items()
+        if len(rs) >= 2 and rs[0].mask_role == "alternatives"
+    }
+
+
 def make_state_family_mask(
     rng: np.random.Generator,
     rects: list[StateRect],
     h: int,
     w: int,
 ) -> np.ndarray:
-    """Reveal one rect of a randomly-picked family, hide its siblings.
+    """Reveal one rect of a randomly-picked `alternatives` family, hide its
+    siblings.
 
     Pixels outside all of the family's rectangles stay observed (1). This is
     "you can see the rest of the BMP, but I'm hiding sibling state frames
-    of the chosen one."
+    of the chosen one." Only families whose mask_role is 'alternatives' are
+    eligible; complementary `components` parts are never hidden from one
+    another.
     """
     mask = np.ones((h, w), dtype=np.uint8)
-    grouped = group_by_family(rects)
-    families = [name for name, rs in grouped.items() if len(rs) >= 2]
+    families = _alternatives_families(rects)
     if not families:
-        # Family with only one rect contributes nothing to hide; fall back to
-        # an empty hide (returns all-ones, equivalent to a "trivial" sample).
+        # No alternatives to hide; fall back to an all-ones (passthrough)
+        # sample. The hidden-normalized loss treats this as a no-op, and
+        # sample_v7_observed_mask redistributes the weight away when it can
+        # tell up front that a file has no alternatives.
         return mask
-    family = rng.choice(families)
-    siblings = grouped[family]
+    family = rng.choice(list(families.keys()))
+    siblings = families[family]
     revealed_idx = int(rng.integers(0, len(siblings)))
     for i, r in enumerate(siblings):
         if i == revealed_idx:
@@ -145,27 +161,59 @@ def make_passthrough_mask(h: int, w: int) -> np.ndarray:
     return np.ones((h, w), dtype=np.uint8)
 
 
+def has_alternatives(rects: list[StateRect] | None) -> bool:
+    """True if any family in `rects` is eligible for sibling-hiding."""
+    return bool(_alternatives_families(rects)) if rects else False
+
+
+def _raw_weights(
+    weights: V7MaskWeights,
+    have_provenance: bool,
+    have_state_family: bool,
+) -> dict[str, float]:
+    """Mask-mode weights after zeroing modes whose prerequisite is missing.
+
+    Two prerequisites:
+      - provenance requires a non-empty visible_masks pool;
+      - state_family requires the file to have at least one `alternatives`
+        family (POSBAR, TITLEBAR, etc. have none, so state_family on them
+        would only ever produce no-op all-ones masks).
+    """
+    return {
+        "provenance": weights.provenance if have_provenance else 0.0,
+        "state_family": weights.state_family if have_state_family else 0.0,
+        "random_rect": weights.random_rect,
+        "whole_file": weights.whole_file,
+        "passthrough": weights.passthrough,
+    }
+
+
+def has_available_mask_mode(
+    weights: V7MaskWeights,
+    *,
+    have_provenance: bool,
+    have_state_family: bool,
+) -> bool:
+    """True if at least one mask mode survives the prerequisite filter.
+
+    When this is False, `sample_v7_observed_mask` would raise — callers (e.g.
+    the eval) should skip the file rather than sample it.
+    """
+    return sum(_raw_weights(weights, have_provenance, have_state_family).values()) > 0
+
+
 def _normalize_weights(
     weights: V7MaskWeights,
     have_provenance: bool,
     have_state_family: bool,
 ) -> dict[str, float]:
-    """Normalize the mask-mode weights for sampling.
+    """Normalize the surviving mask-mode weights to a probability distribution.
 
-    `state_family` weight is kept even when the file has no multi-rect family
-    available - in that case make_state_family_mask returns an all-ones
-    passthrough as a safe fallback, so the requested mode is still honored
-    in spirit (and the caller's other-mode shares aren't silently inflated).
-    Provenance, by contrast, requires a non-empty pool and is redistributed
-    when unavailable.
+    A mode whose prerequisite is missing gets its weight zeroed, and the
+    remaining modes are renormalized (so the other shares are not silently
+    inflated relative to each other). Raises when nothing survives.
     """
-    raw = {
-        "provenance": weights.provenance if have_provenance else 0.0,
-        "state_family": weights.state_family,
-        "random_rect": weights.random_rect,
-        "whole_file": weights.whole_file,
-        "passthrough": weights.passthrough,
-    }
+    raw = _raw_weights(weights, have_provenance, have_state_family)
     total = sum(raw.values())
     if total <= 0:
         raise ValueError("no mask modes are available; all weights resolved to 0")
@@ -187,8 +235,7 @@ def sample_v7_observed_mask(
     logging the actual draw distribution during training.
     """
     have_provenance = visible_masks is not None and len(visible_masks) > 0
-    grouped = group_by_family(family_rects) if family_rects else {}
-    have_state_family = any(len(rs) >= 2 for rs in grouped.values())
+    have_state_family = has_alternatives(family_rects)
     probs = _normalize_weights(weights, have_provenance, have_state_family)
     mode = str(rng.choice(MASK_MODES, p=[probs[m] for m in MASK_MODES]))
     if mode == "provenance":
@@ -218,6 +265,8 @@ def apply_observed_mask(target_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
 __all__ = [
     "V7MaskWeights",
     "MASK_MODES",
+    "has_alternatives",
+    "has_available_mask_mode",
     "make_provenance_mask",
     "make_state_family_mask",
     "make_random_rect_mask",

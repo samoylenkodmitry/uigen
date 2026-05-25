@@ -31,8 +31,12 @@ from atlas_ai.dataset_v7_completion import V7CompletionDataset
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
 from atlas_ai.support_mask import load_support_masks
 from atlas_ai.v7_batching import SameFileBatchSampler
-from atlas_ai.v7_masks import V7MaskWeights
+from atlas_ai.v7_masks import V7MaskWeights, has_alternatives, has_available_mask_mode
 from models.losses_v7 import (
+    hidden_supported_hit5_terms,
+    hidden_supported_l1_terms,
+    hidden_supported_sobel_terms,
+    observed_passthrough_terms,
     support_masked_hit5,
     support_masked_l1_loss,
     support_masked_sobel_mae,
@@ -98,6 +102,42 @@ def _sample_metrics(
     return mae, hit5, sobel
 
 
+# Hidden-normalized metric keys -> their term functions. Each term function
+# returns ([B] num, [B] den) so the eval can accumulate num/den across all
+# batches whose hidden-pixel counts differ. See models/losses_v7.py.
+HIDDEN_TERMS = {
+    "hidden_supported_mae": hidden_supported_l1_terms,
+    "hidden_hit5": hidden_supported_hit5_terms,
+    "hidden_sobel_mae": hidden_supported_sobel_terms,
+    "observed_passthrough_mae": observed_passthrough_terms,
+}
+
+
+def _ratio(num: float, den: float) -> float:
+    return num / den if den > 0 else float("nan")
+
+
+def eval_file_coverage(dataset) -> tuple[list[str], list[str]]:
+    """Split the trainable files into (eligible, skipped) under the dataset's
+    mask weights. A file is eligible if at least one mask mode survives its
+    prerequisites: provenance needs a pool, state_family needs an
+    `alternatives` family. Files with neither (POSBAR, MAIN, TITLEBAR, ...)
+    are skipped for a state_family-only mix rather than crashing the sampler.
+    """
+    eligible: list[str] = []
+    skipped: list[str] = []
+    for spec in TRAINABLE_EXPORT_SPECS:
+        rects = dataset.state_families.get(spec.file_name, [])
+        pool = dataset.provenance_pools.get(spec.file_name)
+        ok = has_available_mask_mode(
+            dataset.mask_weights,
+            have_provenance=bool(pool),
+            have_state_family=has_alternatives(rects),
+        )
+        (eligible if ok else skipped).append(spec.file_name)
+    return eligible, skipped
+
+
 def evaluate(
     model: V7Completer,
     loader: DataLoader,
@@ -106,7 +146,7 @@ def evaluate(
     mask_samples: int,
 ) -> dict:
     model.eval()
-    # Running per-file accumulators: (sum_diff, sum_hit, sum_sobel_diff, n_supported_pixels).
+    # Full-supported (debug/secondary) per-file accumulators.
     per_file_mae: dict[str, float] = {s.file_name: 0.0 for s in TRAINABLE_EXPORT_SPECS}
     per_file_hit: dict[str, float] = {s.file_name: 0.0 for s in TRAINABLE_EXPORT_SPECS}
     per_file_sobel: dict[str, float] = {s.file_name: 0.0 for s in TRAINABLE_EXPORT_SPECS}
@@ -119,6 +159,17 @@ def evaluate(
     per_skin_sobel: dict[str, float] = {}
     per_skin_n: dict[str, int] = {}
     per_skin_count: dict[str, int] = {}
+    # Hidden-normalized (primary) accumulators: num/den per metric.
+    per_file_hnum = {k: {s.file_name: 0.0 for s in TRAINABLE_EXPORT_SPECS} for k in HIDDEN_TERMS}
+    per_file_hden = {k: {s.file_name: 0.0 for s in TRAINABLE_EXPORT_SPECS} for k in HIDDEN_TERMS}
+    per_skin_hnum: dict[str, dict[str, float]] = {k: {} for k in HIDDEN_TERMS}
+    per_skin_hden: dict[str, dict[str, float]] = {k: {} for k in HIDDEN_TERMS}
+    # Per-mode hidden accumulators, keyed by the mask mode that produced each
+    # item ("state_family" / "random_rect" / "provenance" / ...). This is what
+    # lets us tell a state_family failure apart from a random_rect success.
+    per_mode_hnum: dict[str, dict[str, float]] = {k: {} for k in HIDDEN_TERMS}
+    per_mode_hden: dict[str, dict[str, float]] = {k: {} for k in HIDDEN_TERMS}
+    per_mode_count: dict[str, int] = {}
 
     if mask_samples < 1:
         raise ValueError(f"mask_samples must be >= 1, got {mask_samples}")
@@ -134,6 +185,9 @@ def evaluate(
                 skin_ids = batch["skin_id"]
                 if not isinstance(skin_ids, list):
                     skin_ids = [skin_ids]
+                modes = batch.get("mode")
+                if modes is not None and not isinstance(modes, (list, tuple)):
+                    modes = [modes]
                 observed_rgb = batch["observed_rgb"].to(device)
                 observed_mask = batch["observed_mask"].to(device)
                 target_rgb = batch["target_rgb"].to(device)
@@ -162,6 +216,15 @@ def evaluate(
                 per_file_sobel[file_name] += sob * n_support * b
                 per_file_n[file_name] += n_support * b
                 per_file_count[file_name] += b
+                # Hidden-normalized terms (per item) for this batch.
+                observed_mask_f = observed_mask.to(dtype=final_rgb.dtype)
+                hidden_terms = {
+                    k: fn(final_rgb, target_rgb, observed_mask_f, support)
+                    for k, fn in HIDDEN_TERMS.items()
+                }
+                for k, (num, den) in hidden_terms.items():
+                    per_file_hnum[k][file_name] += float(num.sum().item())
+                    per_file_hden[k][file_name] += float(den.sum().item())
                 # Per-skin accumulators. Items in a batch may come from
                 # different skins (the sampler groups by file, not by
                 # skin), so credit each item to its own skin_id.
@@ -173,40 +236,78 @@ def evaluate(
                         per_skin_sobel[sid] = 0.0
                         per_skin_n[sid] = 0
                         per_skin_count[sid] = 0
+                        for k in HIDDEN_TERMS:
+                            per_skin_hnum[k][sid] = 0.0
+                            per_skin_hden[k][sid] = 0.0
                     per_skin_mae[sid] += float(mae_by_sample[i].item()) * n_support
                     per_skin_hit[sid] += float(hit_by_sample[i].item()) * n_support
                     per_skin_sobel[sid] += float(sob_by_sample[i].item()) * n_support
                     per_skin_n[sid] += n_support
                     per_skin_count[sid] += 1
+                    for k, (num, den) in hidden_terms.items():
+                        per_skin_hnum[k][sid] += float(num[i].item())
+                        per_skin_hden[k][sid] += float(den[i].item())
+                    # Per-mode: credit each item to the mask mode that produced it.
+                    if modes is not None and i < len(modes):
+                        mode_i = str(modes[i])
+                        per_mode_count[mode_i] = per_mode_count.get(mode_i, 0) + 1
+                        for k, (num, den) in hidden_terms.items():
+                            per_mode_hnum[k].setdefault(mode_i, 0.0)
+                            per_mode_hden[k].setdefault(mode_i, 0.0)
+                            per_mode_hnum[k][mode_i] += float(num[i].item())
+                            per_mode_hden[k][mode_i] += float(den[i].item())
+
+    def _hidden_block(hnum, hden, name) -> dict[str, float]:
+        return {k: _ratio(hnum[k][name], hden[k][name]) for k in HIDDEN_TERMS}
 
     per_file: dict[str, dict[str, float]] = {}
+    evaluated_files: list[str] = []
     agg_mae_num = agg_mae_den = 0.0
     agg_hit_num = agg_hit_den = 0.0
     agg_sob_num = 0.0
+    agg_hnum = {k: 0.0 for k in HIDDEN_TERMS}
+    agg_hden = {k: 0.0 for k in HIDDEN_TERMS}
     for spec in TRAINABLE_EXPORT_SPECS:
-        n = per_file_n[spec.file_name]
+        name = spec.file_name
+        n = per_file_n[name]
         if n == 0:
-            per_file[spec.file_name] = {
-                "supported_mae": float("nan"), "hit5": float("nan"), "sobel_mae": float("nan"),
-                "samples": 0,
-            }
+            # Not sampled this run (e.g. no eligible mask mode under the
+            # requested weights). Reported in the coverage block, omitted here.
             continue
-        per_file[spec.file_name] = {
-            "supported_mae": per_file_mae[spec.file_name] / n,
-            "hit5":        per_file_hit[spec.file_name] / n,
-            "sobel_mae":   per_file_sobel[spec.file_name] / n,
-            "samples":     per_file_count[spec.file_name],
+        evaluated_files.append(name)
+        for k in HIDDEN_TERMS:
+            agg_hnum[k] += per_file_hnum[k][name]
+            agg_hden[k] += per_file_hden[k][name]
+        per_file[name] = {
+            "supported_mae": per_file_mae[name] / n,
+            "hit5":        per_file_hit[name] / n,
+            "sobel_mae":   per_file_sobel[name] / n,
+            "samples":     per_file_count[name],
+            **_hidden_block(per_file_hnum, per_file_hden, name),
         }
-        agg_mae_num += per_file_mae[spec.file_name]
+        agg_mae_num += per_file_mae[name]
         agg_mae_den += n
-        agg_hit_num += per_file_hit[spec.file_name]
+        agg_hit_num += per_file_hit[name]
         agg_hit_den += n
-        agg_sob_num += per_file_sobel[spec.file_name]
+        agg_sob_num += per_file_sobel[name]
     aggregate = {
         "supported_mae": agg_mae_num / max(1.0, agg_mae_den),
         "hit5":        agg_hit_num / max(1.0, agg_hit_den),
         "sobel_mae":   agg_sob_num / max(1.0, agg_mae_den),
         "mask_samples": mask_samples,
+        **{k: _ratio(agg_hnum[k], agg_hden[k]) for k in HIDDEN_TERMS},
+    }
+    per_mode: dict[str, dict[str, float]] = {}
+    for mode_name in sorted(per_mode_count):
+        per_mode[mode_name] = {
+            "samples": per_mode_count[mode_name],
+            **{k: _ratio(per_mode_hnum[k].get(mode_name, 0.0),
+                         per_mode_hden[k].get(mode_name, 0.0)) for k in HIDDEN_TERMS},
+        }
+    all_files = [s.file_name for s in TRAINABLE_EXPORT_SPECS]
+    coverage = {
+        "evaluated_files": evaluated_files,
+        "skipped_files": [f for f in all_files if f not in evaluated_files],
     }
     per_skin: dict[str, dict[str, float]] = {}
     for sid in sorted(per_skin_n.keys()):
@@ -215,6 +316,7 @@ def evaluate(
             per_skin[sid] = {
                 "supported_mae": float("nan"), "hit5": float("nan"), "sobel_mae": float("nan"),
                 "samples": per_skin_count[sid],
+                **_hidden_block(per_skin_hnum, per_skin_hden, sid),
             }
             continue
         per_skin[sid] = {
@@ -222,8 +324,15 @@ def evaluate(
             "hit5":        per_skin_hit[sid] / n,
             "sobel_mae":   per_skin_sobel[sid] / n,
             "samples":     per_skin_count[sid],
+            **_hidden_block(per_skin_hnum, per_skin_hden, sid),
         }
-    return {"aggregate": aggregate, "per_file": per_file, "per_skin": per_skin}
+    return {
+        "aggregate": aggregate,
+        "per_file": per_file,
+        "per_skin": per_skin,
+        "per_mode": per_mode,
+        "coverage": coverage,
+    }
 
 
 def parse_skin_sources(spec: str) -> dict[str, str]:
@@ -272,8 +381,23 @@ def main() -> int:
         ),
         seed=args.seed,
     )
+    eligible_files, skipped_files = eval_file_coverage(dataset)
+    if not eligible_files:
+        raise SystemExit(
+            "not a valid eval mix: the requested mask weights leave no eligible "
+            "file (every file's modes resolved to 0). Add random_rect/whole_file "
+            "weight, or supply provenance pools."
+        )
+    if skipped_files:
+        print(
+            f"[coverage] evaluating {len(eligible_files)}/{len(TRAINABLE_EXPORT_SPECS)} "
+            f"files under this mask mix; skipping (no eligible mode): "
+            f"{', '.join(skipped_files)}",
+            flush=True,
+        )
     sampler = SameFileBatchSampler(
         dataset.items, batch_size=args.batch, shuffle=False,
+        include_files=set(eligible_files),
     )
     loader = DataLoader(dataset, batch_sampler=sampler, num_workers=0)
     state = load_state_dict(Path(args.checkpoint))

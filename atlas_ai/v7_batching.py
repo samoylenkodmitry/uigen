@@ -26,7 +26,7 @@ share. The weighted sampler fixes that without changing per-step compute.
 
 from __future__ import annotations
 
-from typing import Iterator, Mapping, Sequence
+from typing import Container, Iterator, Mapping, Sequence
 
 import torch
 from torch.utils.data import Sampler
@@ -46,6 +46,11 @@ class SameFileBatchSampler(Sampler[list[int]]):
         generator: optional torch.Generator for reproducible shuffles.
         drop_last: when True, drops the final under-sized batch per file
             instead of yielding it. Default False so every item is covered.
+        include_files: optional set of file_names to keep. When given, items
+            whose file is not in the set are dropped (their indices are never
+            yielded). Used by the eval to skip files that have no eligible
+            mask mode under the requested mask weights. The yielded indices
+            still address the original dataset.
     """
 
     def __init__(
@@ -56,6 +61,7 @@ class SameFileBatchSampler(Sampler[list[int]]):
         shuffle: bool = True,
         generator: torch.Generator | None = None,
         drop_last: bool = False,
+        include_files: Container[str] | None = None,
     ):
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size}")
@@ -63,9 +69,13 @@ class SameFileBatchSampler(Sampler[list[int]]):
         self.shuffle = bool(shuffle)
         self.generator = generator
         self.drop_last = bool(drop_last)
-        # Build groups in file_name order for stable defaults.
+        # Build groups in file_name order for stable defaults. idx is the
+        # index into `items`, i.e. the dataset index, so filtering by file
+        # never shifts the remaining files' indices.
         self.groups: dict[str, list[int]] = {}
         for idx, (_skin, file_name) in enumerate(items):
+            if include_files is not None and file_name not in include_files:
+                continue
             self.groups.setdefault(file_name, []).append(idx)
         self._file_order = list(self.groups.keys())
 

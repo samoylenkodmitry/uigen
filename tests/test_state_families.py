@@ -53,7 +53,7 @@ def test_strip_expansion_volume_28_frames():
     frames = grouped["slider_frames"]
     assert len(frames) == 28
     # First frame at (0, 0, 68, 13), last at (0, 27*15, 68, 13).
-    assert frames[0] == StateRect("VOLUME.bmp", "slider_frames", "frame_00", 0, 0, 68, 13)
+    assert frames[0] == StateRect("VOLUME.bmp", "slider_frames", "frame_00", 0, 0, 68, 13, "alternatives")
     last = frames[-1]
     assert (last.x, last.y, last.w, last.h) == (0, 27 * 15, 68, 13)
     # 'thumb' family is also present.
@@ -105,7 +105,7 @@ def test_rejects_out_of_bounds_rect(tmp_path):
     bad.write_text(yaml.safe_dump({
         "schema": "state_families_classic_v1",
         "files": {"VOLUME.bmp": {"families": [{
-            "name": "x", "kind": "sprite",
+            "name": "x", "kind": "sprite", "mask_role": "components",
             "rects": [{"name": "r", "x": 0, "y": 0, "w": 999, "h": 999}],
         }]}},
     }))
@@ -131,7 +131,7 @@ def test_rejects_missing_trainable_file(tmp_path):
 
 def test_rejects_empty_family(tmp_path):
     data = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
-    data["files"]["MAIN.bmp"]["families"] = [{"name": "empty", "kind": "sprite", "rects": []}]
+    data["files"]["MAIN.bmp"]["families"] = [{"name": "empty", "kind": "sprite", "mask_role": "single", "rects": []}]
     bad = tmp_path / "bad.yaml"
     bad.write_text(yaml.safe_dump(data))
     with pytest.raises(ValueError, match="no rects declared"):
@@ -142,6 +142,7 @@ def test_rejects_strip_axis_mismatch(tmp_path):
     data = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     data["files"]["VOLUME.bmp"]["families"] = [{
             "name": "x", "kind": "vertical_strip", "frame_axis": "x",
+            "mask_role": "alternatives",
             "frame_count": 2, "frame_w": 4, "frame_h": 4,
             "x": 0, "y": 0, "pitch": 4,
         }]
@@ -154,10 +155,63 @@ def test_rejects_strip_axis_mismatch(tmp_path):
 def test_rejects_zero_size(tmp_path):
     data = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     data["files"]["VOLUME.bmp"]["families"] = [{
-            "name": "x", "kind": "sprite",
+            "name": "x", "kind": "sprite", "mask_role": "components",
             "rects": [{"name": "r", "x": 0, "y": 0, "w": 0, "h": 10}],
         }]
     bad = tmp_path / "bad.yaml"
     bad.write_text(yaml.safe_dump(data))
     with pytest.raises(ValueError, match="non-positive size"):
+        load_state_families(bad)
+
+
+def test_mask_role_loaded_on_every_rect():
+    """Every loaded rect carries a valid mask_role and it is consistent
+    within a family."""
+    families = load_state_families(CONFIG)
+    for file_name, rects in families.items():
+        by_family: dict[str, set[str]] = {}
+        for r in rects:
+            assert r.mask_role in ("alternatives", "components", "single"), (file_name, r)
+            by_family.setdefault(r.family, set()).add(r.mask_role)
+        for fam, roles in by_family.items():
+            assert len(roles) == 1, f"{file_name}/{fam}: mixed mask_role {roles}"
+
+
+def test_classic_roles_are_correct():
+    """The role assignments that matter for the V7 Phase 0 fix."""
+    families = load_state_families(CONFIG)
+    role = lambda f, fam: next(r.mask_role for r in families[f] if r.family == fam)
+    # The POSBAR bug: track + thumb are complementary parts, not alternatives.
+    assert role("POSBAR.bmp", "parts") == "components"
+    # Alternatives that must keep hiding siblings.
+    assert role("CBUTTONS.bmp", "play") == "alternatives"
+    assert role("VOLUME.bmp", "slider_frames") == "alternatives"
+    assert role("BALANCE.bmp", "slider_frames") == "alternatives"
+    assert role("EQMAIN.bmp", "slider_frames") == "alternatives"
+    assert role("EQMAIN.bmp", "on_button") == "alternatives"
+    assert role("MONOSTER.bmp", "indicators") == "alternatives"
+    assert role("PLAYPAUS.bmp", "status") == "alternatives"
+    # Components that must never be split into alternatives.
+    assert role("EQMAIN.bmp", "chrome") == "components"
+    assert role("TITLEBAR.bmp", "corner_buttons") == "components"
+    assert role("PLEDIT.bmp", "footer") == "components"
+    assert role("VOLUME.bmp", "thumb") == "components"
+
+
+def test_rejects_missing_mask_role(tmp_path):
+    data = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    for fam in data["files"]["VOLUME.bmp"]["families"]:
+        fam.pop("mask_role", None)
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="mask_role must be one of"):
+        load_state_families(bad)
+
+
+def test_rejects_invalid_mask_role(tmp_path):
+    data = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    data["files"]["VOLUME.bmp"]["families"][0]["mask_role"] = "siblings"
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="mask_role must be one of"):
         load_state_families(bad)

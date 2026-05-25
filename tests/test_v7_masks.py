@@ -201,6 +201,124 @@ def test_sample_v7_redistributes_when_no_provenance():
     assert counts["whole_file"] > 0
 
 
+# ---------------------------------------------------------------------------
+# mask_role semantics (Tasks 2-4): only `alternatives` families hide siblings.
+# ---------------------------------------------------------------------------
+
+
+def _spec(file_name: str):
+    return next(s for s in TRAINABLE_EXPORT_SPECS if s.file_name == file_name)
+
+
+def _rect_state(mask: np.ndarray, r) -> str:
+    region = mask[r.y : r.y + r.h, r.x : r.x + r.w]
+    if region.all():
+        return "visible"
+    if (region == 0).all():
+        return "hidden"
+    return "mixed"
+
+
+def test_posbar_state_family_never_hides_track_or_thumb():
+    """POSBAR track + thumb are components, not alternatives: a state_family
+    mask must leave both fully observed (the V7 Phase 0 POSBAR bug)."""
+    families = load_state_families(CONFIG)
+    rects = families["POSBAR.bmp"]
+    spec = _spec("POSBAR.bmp")
+    parts = group_by_family(rects)["parts"]
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        mask = make_state_family_mask(rng, rects, spec.h, spec.w)
+        for r in parts:
+            assert _rect_state(mask, r) == "visible", r
+        # POSBAR has no alternatives at all -> nothing is hidden.
+        assert mask.sum() == spec.h * spec.w
+
+
+def test_posbar_sample_redistributes_state_family_weight():
+    """A file with no alternatives gets state_family probability zeroed (the
+    weight is redistributed), rather than emitting no-op all-ones masks."""
+    families = load_state_families(CONFIG)
+    rects = families["POSBAR.bmp"]
+    spec = _spec("POSBAR.bmp")
+    rng = np.random.default_rng(0)
+    counts: Counter[str] = Counter()
+    for _ in range(2000):
+        _, mode = sample_v7_observed_mask(
+            rng, h=spec.h, w=spec.w, family_rects=rects, visible_masks=None,
+        )
+        counts[mode] += 1
+    assert counts["state_family"] == 0
+    assert counts["random_rect"] > 0
+
+
+def test_titlebar_corner_buttons_are_not_alternatives():
+    """TITLEBAR has only component families, so state_family hides nothing."""
+    families = load_state_families(CONFIG)
+    rects = families["TITLEBAR.bmp"]
+    spec = _spec("TITLEBAR.bmp")
+    rng = np.random.default_rng(1)
+    for _ in range(200):
+        mask = make_state_family_mask(rng, rects, spec.h, spec.w)
+        assert mask.sum() == spec.h * spec.w
+
+
+def test_pledit_footer_halves_are_not_alternatives():
+    """PLEDIT footer_left/footer_right are complementary halves, never hidden."""
+    families = load_state_families(CONFIG)
+    rects = families["PLEDIT.bmp"]
+    spec = _spec("PLEDIT.bmp")
+    footer = group_by_family(rects)["footer"]
+    rng = np.random.default_rng(2)
+    for _ in range(200):
+        mask = make_state_family_mask(rng, rects, spec.h, spec.w)
+        for r in footer:
+            assert _rect_state(mask, r) == "visible", r
+        assert mask.sum() == spec.h * spec.w   # PLEDIT has no alternatives
+
+
+def test_eqmain_chrome_never_hidden_but_sliders_still_alternate():
+    """EQMAIN mixes roles: chrome (components) is never hidden, while
+    slider_frames (alternatives) still reveal one of 28 and hide 27."""
+    families = load_state_families(CONFIG)
+    rects = families["EQMAIN.bmp"]
+    spec = _spec("EQMAIN.bmp")
+    grouped = group_by_family(rects)
+    chrome = grouped["chrome"]
+    frames = grouped["slider_frames"]
+    rng = np.random.default_rng(3)
+    saw_slider_hide = False
+    for _ in range(400):
+        mask = make_state_family_mask(rng, rects, spec.h, spec.w)
+        for r in chrome:
+            assert _rect_state(mask, r) == "visible", r
+        hidden = [i for i, r in enumerate(frames) if _rect_state(mask, r) == "hidden"]
+        if hidden:
+            assert len(hidden) == 27   # one frame revealed, the other 27 hidden
+            saw_slider_hide = True
+    assert saw_slider_hide
+
+
+def test_cbuttons_alternatives_still_hide_one_state():
+    """CBUTTONS play pressed/unpressed must still hide one state from the other."""
+    families = load_state_families(CONFIG)
+    rects = families["CBUTTONS.bmp"]
+    spec = _spec("CBUTTONS.bmp")
+    play = group_by_family(rects)["play"]
+    up = next(r for r in play if r.name == "unpressed")
+    pr = next(r for r in play if r.name == "pressed")
+    rng = np.random.default_rng(4)
+    saw_up_hidden = saw_pr_hidden = False
+    for _ in range(400):
+        mask = make_state_family_mask(rng, rects, spec.h, spec.w)
+        su, sp = _rect_state(mask, up), _rect_state(mask, pr)
+        if "hidden" in (su, sp):   # the 'play' family was chosen this draw
+            assert {su, sp} == {"hidden", "visible"}, (su, sp)
+            saw_up_hidden = saw_up_hidden or su == "hidden"
+            saw_pr_hidden = saw_pr_hidden or sp == "hidden"
+    assert saw_up_hidden and saw_pr_hidden
+
+
 def test_apply_observed_mask_zeros_hidden_pixels():
     target = np.full((4, 4, 3), 0.5, dtype=np.float32)
     mask = np.array([
