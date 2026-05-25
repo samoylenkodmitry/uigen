@@ -128,4 +128,37 @@ high mae but high hit5, i.e. a few large outliers over many near-perfect pixels.
    files / include a non-state_family mode so component-only files don't crash
    or no-op (the known training caveat).
 
-No training was run.
+No training was run for the re-eval above.
+
+## Phase 0 sanity probes (A/B/C) — local only, hidden loss
+
+After fixing the trainer's mask-mix guard (component-only files no longer crash
+a state_family-only run), three tiny local probes confirm the hidden-normalized
+loss + architecture actually learn inpainting (these are short overfit/smoke
+runs, NOT the gated long Kaggle run). All c48, lr 1e-3, sobel 0.25.
+
+**A — can hidden random_rect fall? (one skin, one file, random_rect=1.0)**
+- TITLEBAR was a dud probe (near-uniform dark strip → hidden_l1 ≈0.03 floor from
+  step 0, nothing to learn).
+- MAIN (textured 275×116), 8k steps: hidden_l1 **0.0996 → 0.036**, monotonic, no
+  plateau; easy masks reach 0.007. → inpainting is learnable.
+
+**B — all files, one skin, random_rect-heavy (sf0.3/rr0.7), 6k steps**
+- overall hidden_l1 **0.0997 → 0.0501**; every file dropped:
+  EQMAIN 0.289→0.076, VOLUME 0.091→0.040, POSBAR 0.097→0.049,
+  BALANCE 0.059→0.020, PLAYPAUS 0.032→0.013, MONOSTER 0.056→0.029,
+  MAIN 0.101→0.077, CBUTTONS 0.139→0.081, SHUFREP 0.114→0.087 (slowest).
+
+**C — 14-skin oracle skin_id, sf0.3/rr0.7, 4k steps, batch 8**
+- overall hidden_l1 **0.2368 → 0.1465**, monotonic, every file improving
+  (MONOSTER 0.231→0.103, PLAYPAUS 0.253→0.130, POSBAR 0.219→0.140, ...).
+- Starts far higher than single-skin (the oracle must also disambiguate 14
+  skins) and is nowhere near converged at 4k — but the multi-skin path trains
+  cleanly under the new loss.
+
+**Read:** the measurement foundation is sound and the model can learn hidden
+reconstruction; the drops are real and monotonic but **slow** at batch=1 / lr
+1e-3 / few-k steps. A real run needs a larger batch, more steps, an
+rr-heavy (or balanced sf/rr) mix, and must be judged on hidden metrics. Local
+GPU OOM'd at batch 14; Kaggle T4 handled batch 12 previously.
+
