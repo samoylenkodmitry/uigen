@@ -35,7 +35,7 @@ from atlas_ai.dataset_v7_completion import V7CompletionDataset
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
 from atlas_ai.support_mask import load_support_masks
 from atlas_ai.v7_batching import SameFileBatchSampler, WeightedSameFileBatchSampler
-from atlas_ai.v7_masks import V7MaskWeights
+from atlas_ai.v7_masks import V7MaskWeights, has_alternatives, has_available_mask_mode
 from models.losses_v7 import (
     hidden_supported_l1_loss,
     hidden_supported_l1_per_item,
@@ -356,6 +356,31 @@ def main() -> int:
     else:
         sampler = SameFileBatchSampler(
             dataset.items, batch_size=args.batch, shuffle=True, generator=generator,
+        )
+    # Guard: every file that will actually be sampled must have at least one
+    # eligible mask mode under the configured weights. Otherwise __getitem__
+    # raises mid-run — e.g. a state_family-only mix sampling a component-only
+    # file (POSBAR/MAIN/TITLEBAR/PLEDIT have no `alternatives` family). Fail
+    # fast at startup instead of crashing thousands of steps in.
+    if args.sampling_mode == "weighted":
+        sampled_files = list(sampler.files)
+    else:
+        sampled_files = sorted({f for (_s, f) in dataset.items})
+    ineligible = [
+        f for f in sampled_files
+        if not has_available_mask_mode(
+            mask_weights,
+            have_provenance=bool(dataset.provenance_pools.get(f)),
+            have_state_family=has_alternatives(dataset.state_families.get(f, [])),
+        )
+    ]
+    if ineligible:
+        raise SystemExit(
+            "invalid mask mix: no eligible mask mode for sampled file(s) "
+            f"{', '.join(sorted(ineligible))}. They have no `alternatives` "
+            "family, so a state_family-only mix leaves nothing to sample. Add "
+            "--mask-random-rect > 0 (and/or --mask-whole-file/--mask-provenance), "
+            "or drop these files from --file-sampling-weights."
         )
     if args.sampling_mode == "weighted":
         # WeightedSameFileBatchSampler intentionally reuses the same

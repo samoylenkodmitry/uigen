@@ -158,6 +158,33 @@ def test_eval_per_skin_metrics_are_not_batch_averages():
     assert result["per_skin"]["bad"]["supported_mae"] == pytest.approx(1.0)
     assert result["per_skin"]["bad"]["hit5"] == pytest.approx(0.0)
 
+def test_trainer_rejects_state_family_only_mix_on_component_files(tmp_path):
+    """A state_family-only mix over all files must fail fast at startup, not
+    crash mid-run when the round-robin sampler reaches a component-only file."""
+    run = tmp_path / "v7_guard"
+    res = subprocess.run(_trainer_args(
+        run, "--steps", "2",
+        "--mask-provenance", "0", "--mask-state-family", "1",
+        "--mask-random-rect", "0", "--mask-whole-file", "0", "--mask-passthrough", "0",
+    ), capture_output=True)
+    assert res.returncode != 0
+    blob = res.stderr + res.stdout
+    assert b"no eligible mask mode" in blob
+    # The error should name a component-only file.
+    assert b"POSBAR.bmp" in blob or b"MAIN.bmp" in blob or b"TITLEBAR.bmp" in blob
+
+
+def test_trainer_state_family_plus_random_rect_passes_guard(tmp_path):
+    """Adding random_rect weight makes every file eligible -> guard passes."""
+    run = tmp_path / "v7_guard_ok"
+    subprocess.run(_trainer_args(
+        run, "--steps", "2",
+        "--mask-provenance", "0", "--mask-state-family", "0.7",
+        "--mask-random-rect", "0.3", "--mask-whole-file", "0", "--mask-passthrough", "0",
+    ), check=True)
+    assert (run / "last.safetensors").exists()
+
+
 def _load_eval_module():
     spec = importlib.util.spec_from_file_location("eval_v7", EVAL_SCRIPT)
     assert spec and spec.loader
