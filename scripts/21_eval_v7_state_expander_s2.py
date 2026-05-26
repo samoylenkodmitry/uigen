@@ -90,8 +90,8 @@ def _region_terms(pred, target, region_b1):
 
 def _model_kwargs(state):
     ver = int(state["model_version"].reshape(-1)[0].item())
-    if ver not in (72, 73):
-        raise SystemExit(f"need a V7StateExpander checkpoint (version 72/73), got {ver}")
+    if ver not in (72, 73, 74):
+        raise SystemExit(f"need a V7StateExpander checkpoint (version 72/73/74), got {ver}")
     g = lambda k: int(state[k].reshape(-1)[0].item())
     om = _OUTPUT_MODE_BY_CODE.get(g("output_mode_buffer"), "residual") if "output_mode_buffer" in state else "residual"
     return {"num_families": g("num_families_buffer"), "max_frames": g("max_frames_buffer"),
@@ -99,6 +99,9 @@ def _model_kwargs(state):
             "family_embedding_dim": g("family_embedding_dim_buffer"), "frame_embedding_dim": g("frame_embedding_dim_buffer"),
             "num_skins": g("num_skins_buffer"), "skin_embedding_dim": g("skin_embedding_dim_buffer"),
             "style_context_dim": g("style_context_dim_buffer") if "style_context_dim_buffer" in state else 0,
+            "geometry_gate": ("geometry_gate_buffer" in state and g("geometry_gate_buffer") == 1),
+            "geo_gate_hidden": g("geo_gate_hidden_buffer") if "geo_gate_hidden_buffer" in state else 64,
+            "geometry_dim": g("geometry_dim_buffer") if "geometry_dim_buffer" in state else 13,
             "output_mode": om}
 
 
@@ -119,10 +122,11 @@ def evaluate(model, loader, device):
             source = sel("source_rgb").to(device); target = sel("target_rgb").to(device)
             support = sel("target_support").to(device)
             skin_id = sel("skin_index").to(device=device, dtype=torch.long) if model.num_skins > 0 else None
+            pair_geom = sel("pair_geom").to(device) if model.geometry_gate else None
             margs = (sel("source_idx").to(device), sel("target_idx").to(device),
                      sel("family_id").to(device), sel("file_id").to(device))
             if gated:
-                pred, gate, _gl = model(source, *margs, skin_id=skin_id, return_gate=True)
+                pred, gate, _gl = model(source, *margs, skin_id=skin_id, pair_geom=pair_geom, return_gate=True)
             else:
                 pred = model(source, *margs, skin_id=skin_id); gate = None
             diff_big = (source - target).abs().amax(dim=1, keepdim=True) > CHANGED_THRESHOLD

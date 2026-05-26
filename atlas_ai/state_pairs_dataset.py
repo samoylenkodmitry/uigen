@@ -40,6 +40,34 @@ from atlas_ai.v7_masks import has_alternatives
 
 
 FILE_TO_ID: dict[str, int] = {s.file_name: i for i, s in enumerate(TRAINABLE_EXPORT_SPECS)}
+FILE_DIMS: dict[str, tuple[int, int]] = {s.file_name: (s.w, s.h) for s in TRAINABLE_EXPORT_SPECS}
+
+# Deployable, skin-INDEPENDENT pair geometry returned per (i, j) pair as
+# `pair_geom`. In classic skins the per-family sprite layout is fixed across
+# skins, so this vector is the same for a given (family, i, j) regardless of
+# style — exactly the signal a geometry-only gate prior can use to localize the
+# change on an UNSEEN skin (the S2a failure was the gate never opening there).
+# All values normalized to ~[0,1] (delta index in [-1,1]):
+#   src rect  (x,y,w,h)/file_dims          [4]
+#   tgt rect  (x,y,w,h)/file_dims          [4]
+#   src idx, tgt idx, delta idx / (n-1)    [3]
+#   file (w,h) / GEOM_SIZE_NORM            [2]
+GEOM_SIZE_NORM = 512.0
+PAIR_GEOM_DIM = 13
+
+
+def pair_geom_vector(src: StateRect, tgt: StateRect, i: int, j: int,
+                     num_frames: int, file_w: int, file_h: int) -> list[float]:
+    """13-d normalized geometry vector for the (src->tgt) pair. See PAIR_GEOM_DIM."""
+    W = float(max(1, file_w))
+    H = float(max(1, file_h))
+    D = float(max(1, num_frames - 1))
+    return [
+        src.x / W, src.y / H, src.w / W, src.h / H,
+        tgt.x / W, tgt.y / H, tgt.w / W, tgt.h / H,
+        i / D, j / D, (j - i) / D,
+        file_w / GEOM_SIZE_NORM, file_h / GEOM_SIZE_NORM,
+    ]
 
 
 @dataclass(frozen=True)
@@ -229,10 +257,16 @@ class StatePairsDataset(Dataset):
         sup = self.support_masks[fam.file_name]
         tgt_sup = sup[tgt_rect.y : tgt_rect.y + tgt_rect.h, tgt_rect.x : tgt_rect.x + tgt_rect.w]
         target_support = torch.from_numpy(tgt_sup.astype(np.float32)).unsqueeze(0).contiguous()
+        file_w, file_h = FILE_DIMS[fam.file_name]
+        pair_geom = torch.tensor(
+            pair_geom_vector(src_rect, tgt_rect, i, j, fam.num_frames, file_w, file_h),
+            dtype=torch.float32,
+        )  # [PAIR_GEOM_DIM]
         return {
             "source_rgb": source_rgb,          # [3, fh, fw]
             "target_rgb": target_rgb,          # [3, fh, fw]
             "target_support": target_support,  # [1, fh, fw] in {0,1}
+            "pair_geom": pair_geom,            # [PAIR_GEOM_DIM] skin-independent geometry
             "source_idx": i,
             "target_idx": j,
             "family_id": fid,
@@ -248,4 +282,5 @@ class StatePairsDataset(Dataset):
         }
 
 
-__all__ = ["StatePairsDataset", "AltFamily", "collect_alt_families", "FILE_TO_ID"]
+__all__ = ["StatePairsDataset", "AltFamily", "collect_alt_families", "FILE_TO_ID",
+           "FILE_DIMS", "PAIR_GEOM_DIM", "pair_geom_vector"]

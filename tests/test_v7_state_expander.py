@@ -10,7 +10,11 @@ from collections import Counter
 
 import pytest
 
-from atlas_ai.state_pairs_dataset import StatePairsDataset, collect_alt_families
+from atlas_ai.state_pairs_dataset import (
+    PAIR_GEOM_DIM,
+    StatePairsDataset,
+    collect_alt_families,
+)
 from atlas_ai.v7_batching import SameKeyBatchSampler, WeightedSameKeyBatchSampler
 from models.v7_state_expander import V7StateExpander
 
@@ -292,3 +296,83 @@ def test_state_expander_eval_kwargs_load_v72_and_v73():
     kwargs73 = eval_s2._model_kwargs(v73.state_dict())
     assert kwargs73["style_context_dim"] == 8
     V7StateExpander(**kwargs73).load_state_dict(v73.state_dict())
+
+    # v74 (geometry gate) round-trips through the eval kwargs path too.
+    v74 = V7StateExpander(**base_args, geometry_gate=True, geo_gate_hidden=16)
+    kwargs74 = eval_s2._model_kwargs(v74.state_dict())
+    assert kwargs74["geometry_gate"] is True and kwargs74["geo_gate_hidden"] == 16
+    assert kwargs74["geometry_dim"] == PAIR_GEOM_DIM
+    V7StateExpander(**kwargs74).load_state_dict(v74.state_dict())
+    # v72/v73 kwargs must default geometry_gate off so old checkpoints still load.
+    assert kwargs72["geometry_gate"] is False and kwargs73["geometry_gate"] is False
+
+
+def test_dataset_returns_pair_geom():
+    ds = StatePairsDataset({"default": str(DEFAULT_SKIN)}, CONFIG, include_identity=True)
+    item = ds[0]
+    pg = item["pair_geom"]
+    assert pg.shape == (PAIR_GEOM_DIM,)
+    assert torch.isfinite(pg).all()
+    # delta index for an identity pair (i==j) is 0; an off-diagonal differs.
+    vol = next(f.family_id for f in ds.alt_families if f.key == "VOLUME/slider_frames")
+    off_idx = next(i for i, (s, fid, a, b) in enumerate(ds.items)
+                   if fid == vol and a == 3 and b == 12)
+    pg_off = ds[off_idx]["pair_geom"]
+    assert abs(float(pg_off[10])) > 0.0  # delta index nonzero off-diagonal
+
+
+def test_geometry_gate_model_forward_and_neutral_init():
+    model = V7StateExpander(num_families=16, max_frames=28, base_channels=8,
+                            file_embedding_dim=4, family_embedding_dim=4, frame_embedding_dim=4,
+                            geometry_gate=True, geo_gate_hidden=16, output_mode="gated")
+    assert int(model.model_version.item()) == 74
+    assert int(model.geometry_gate_buffer.item()) == 1
+    assert int(model.geo_gate_hidden_buffer.item()) == 16
+    assert int(model.geometry_dim_buffer.item()) == PAIR_GEOM_DIM
+    src = torch.rand(2, 3, 9, 9)
+    pg = torch.rand(2, PAIR_GEOM_DIM)
+    idx = (torch.tensor([0, 1]), torch.tensor([1, 0]), torch.tensor([0, 1]), torch.tensor([9, 9]))
+    with torch.no_grad():
+        out, gate, logits = model(src, *idx, pair_geom=pg, return_gate=True)
+        assert out.shape == (2, 3, 9, 9)
+        assert gate.shape == logits.shape == (2, 1, 9, 9)
+        assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
+        # Final geo-gate layer is zero-init -> prior is a no-op at init: the gate
+        # must equal the content-only gate (disable geo head and recompute).
+        model.geo_gate = None
+        _o2, gate_content, _l2 = model(src, *idx, pair_geom=pg, return_gate=True)
+        assert torch.allclose(gate, gate_content, atol=1e-6)
+
+
+def test_geometry_gate_requires_pair_geom_and_gated_mode():
+    model = V7StateExpander(num_families=4, max_frames=4, base_channels=8,
+                            geometry_gate=True, geo_gate_hidden=8, output_mode="gated")
+    src = torch.rand(1, 3, 9, 9)
+    idx = (torch.tensor([0]), torch.tensor([1]), torch.tensor([0]), torch.tensor([9]))
+    with pytest.raises(ValueError):
+        model(src, *idx, return_gate=True)  # pair_geom missing
+    with pytest.raises(ValueError):
+        V7StateExpander(num_families=4, max_frames=4, base_channels=8,
+                        geometry_gate=True, output_mode="residual")  # geo gate needs gated
+
+
+def test_geometry_gate_compute_loss_runs():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("tr_se_geo", ROOT / "train_v7_state_expander.py")
+    tr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tr)
+    model = V7StateExpander(num_families=16, max_frames=28, base_channels=8,
+                            file_embedding_dim=4, family_embedding_dim=4, frame_embedding_dim=4,
+                            geometry_gate=True, geo_gate_hidden=16, output_mode="gated")
+    b = 2
+    batch = {
+        "source_rgb": torch.rand(b, 3, 9, 9), "target_rgb": torch.rand(b, 3, 9, 9),
+        "target_support": torch.ones(b, 1, 9, 9),
+        "source_idx": torch.tensor([0, 1]), "target_idx": torch.tensor([1, 0]),
+        "family_id": torch.tensor([0, 1]), "file_id": torch.tensor([9, 9]),
+        "skin_index": torch.tensor([0, 0]),
+        "pair_geom": torch.rand(b, PAIR_GEOM_DIM),
+    }
+    out = tr.compute_loss(model, batch, {}, torch.device("cpu"), sobel_weight=0.25,
+                          gate_loss_weight=0.05)
+    assert torch.isfinite(out["total"]) and "gate_loss" in out

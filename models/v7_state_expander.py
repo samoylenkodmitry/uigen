@@ -84,6 +84,37 @@ class _SourceStyleEncoder(nn.Module):
         return self.proj(torch.cat([feat, stats], dim=1))
 
 
+class _GeometryGate(nn.Module):
+    """Per-pixel, RGB-FREE gate prior — a coordinate MLP (1x1 convs) over
+    [fourier coords, broadcast pair-geometry scalars, broadcast family code].
+
+    Every input is skin-INDEPENDENT: classic sprite geometry is fixed across
+    skins and family ids are shared, so the change-localization it learns
+    transfers to unseen skins — unlike the content gate, which is produced from
+    RGB-entangled U-Net features and stays out-of-distribution on a new style
+    (the S2a / S2a-context failure: the gate never opened on held-out skins).
+
+    Its logits are ADDED to the content gate's logits. The final layer is
+    zero-initialized so the prior starts as a no-op (total gate == content gate)
+    and learns a positive additive correction in the regions a transition
+    changes."""
+
+    def __init__(self, in_ch: int, hidden: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, hidden, kernel_size=1),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(hidden, hidden, kernel_size=1),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(hidden, 1, kernel_size=1),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, geo_channels: torch.Tensor) -> torch.Tensor:
+        return self.net(geo_channels)
+
+
 class V7StateExpander(nn.Module):
     """Conditional frame/state translator for alternatives families.
 
@@ -100,6 +131,14 @@ class V7StateExpander(nn.Module):
             >0, the model encodes source_rgb to a global code and broadcasts it
             into the transition/gate path. This is not an oracle id and is safe
             for unseen skins.
+        geometry_gate: when True (gated mode only) add a skin-independent
+            additive gate prior derived from fixed classic geometry + family id
+            (no RGB). Targets the S2a failure where the content gate, built from
+            RGB features, never opened on unseen skins. Expects forward(...,
+            pair_geom=...).
+        geo_gate_hidden: hidden width of the geometry-gate coordinate MLP.
+        geometry_dim: width of the pair_geom vector (must match the dataset's
+            PAIR_GEOM_DIM).
         frequencies: Fourier frequencies for spatial coords.
     """
 
@@ -115,12 +154,17 @@ class V7StateExpander(nn.Module):
         num_skins: int = 0,
         skin_embedding_dim: int = 0,
         style_context_dim: int = 0,
+        geometry_gate: bool = False,
+        geo_gate_hidden: int = 64,
+        geometry_dim: int = 13,
         frequencies: tuple[int, ...] = DEFAULT_FREQUENCIES,
         output_mode: str = "gated",
     ):
         super().__init__()
         if output_mode not in _OUTPUT_MODES:
             raise ValueError(f"output_mode must be one of {list(_OUTPUT_MODES)}, got {output_mode!r}")
+        if geometry_gate and output_mode != "gated":
+            raise ValueError("geometry_gate requires output_mode='gated' (it adds to the gate logits)")
         self.output_mode = output_mode
         self.num_families = int(num_families)
         self.max_frames = int(max_frames)
@@ -135,6 +179,9 @@ class V7StateExpander(nn.Module):
         self.style_context_dim = int(style_context_dim)
         if self.style_context_dim < 0:
             raise ValueError("style_context_dim must be >=0")
+        self.geometry_gate = bool(geometry_gate)
+        self.geo_gate_hidden = int(geo_gate_hidden)
+        self.geometry_dim = int(geometry_dim)
         self.frequencies = tuple(int(f) for f in frequencies)
 
         self.file_embedding = nn.Embedding(len(TRAINABLE_EXPORT_SPECS), self.file_embedding_dim)
@@ -180,8 +227,14 @@ class V7StateExpander(nn.Module):
             nn.init.constant_(self.gate_proj.bias, _GATE_BIAS_INIT)
         else:
             self.gate_proj = None
+        # Geometry gate prior: a skin-independent additive logit on the gate.
+        if self.geometry_gate:
+            geo_in = coord_ch + self.geometry_dim + self.family_embedding_dim
+            self.geo_gate = _GeometryGate(geo_in, self.geo_gate_hidden)
+        else:
+            self.geo_gate = None
 
-        model_version = 73 if self.style_context_dim > 0 else 72
+        model_version = 74 if self.geometry_gate else (73 if self.style_context_dim > 0 else 72)
         self.register_buffer("model_version", torch.tensor([model_version], dtype=torch.int32))
         self.register_buffer(
             "output_mode_buffer", torch.tensor([_OUTPUT_MODES[output_mode]], dtype=torch.int32)
@@ -201,6 +254,15 @@ class V7StateExpander(nn.Module):
             self.register_buffer(
                 "style_context_dim_buffer", torch.tensor([self.style_context_dim], dtype=torch.int32)
             )
+        # Geometry-gate buffers registered only when enabled, so older v72/v73
+        # checkpoints (no geometry gate) still load into a default-built model.
+        if self.geometry_gate:
+            for name, val in (
+                ("geometry_gate_buffer", 1),
+                ("geo_gate_hidden_buffer", self.geo_gate_hidden),
+                ("geometry_dim_buffer", self.geometry_dim),
+            ):
+                self.register_buffer(name, torch.tensor([val], dtype=torch.int32))
         self.register_buffer(
             "frequencies_buffer", torch.tensor(list(self.frequencies), dtype=torch.int32)
         )
@@ -243,10 +305,12 @@ class V7StateExpander(nn.Module):
         family_id: torch.Tensor,
         file_id: torch.Tensor,
         skin_id: torch.Tensor | None = None,
+        pair_geom: torch.Tensor | None = None,
         return_gate: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         if source_rgb.dim() != 4 or source_rgb.shape[1] != 3:
             raise ValueError(f"source_rgb must be [B, 3, H, W], got {tuple(source_rgb.shape)}")
+        b, _, h, w = source_rgb.shape
         x = self._build_conditioning(
             source_rgb, source_idx, target_idx, family_id, file_id, skin_id
         )
@@ -265,7 +329,20 @@ class V7StateExpander(nn.Module):
             result = torch.sigmoid(out)
         elif self.output_mode == "gated":
             rgb = torch.sigmoid(out)
-            gate_logits = self.gate_proj(u1)            # [B, 1, H, W]
+            gate_logits = self.gate_proj(u1)            # [B, 1, H, W] content (RGB) gate
+            if self.geo_gate is not None:
+                # Skin-independent additive gate prior: localize the change from
+                # fixed classic geometry, not from the (OOD-on-unseen-skins) RGB
+                # features. coords + broadcast pair-geometry + broadcast family.
+                if pair_geom is None:
+                    raise ValueError("pair_geom is required when geometry_gate=True")
+                coords = _fourier_coords(h, w, self.frequencies, source_rgb.device, source_rgb.dtype)
+                geo_channels = torch.cat([
+                    coords.unsqueeze(0).expand(b, -1, -1, -1),
+                    self._map(pair_geom, b, h, w),
+                    self._map(self.family_embedding(family_id), b, h, w),
+                ], dim=1)
+                gate_logits = gate_logits + self.geo_gate(geo_channels)
             gate = torch.sigmoid(gate_logits)            # copy-biased gate in [0, 1]
             result = (1.0 - gate) * source_rgb + gate * rgb
         else:

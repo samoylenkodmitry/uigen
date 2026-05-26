@@ -34,7 +34,7 @@ from torch.utils.data._utils.collate import default_collate
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from atlas_ai.state_pairs_dataset import StatePairsDataset
+from atlas_ai.state_pairs_dataset import PAIR_GEOM_DIM, StatePairsDataset
 from atlas_ai.support_mask import load_support_masks
 from atlas_ai.v7_batching import WeightedSameKeyBatchSampler
 from models.losses_v7 import (
@@ -79,10 +79,11 @@ def compute_loss(model, batch, support_masks, device, *, sobel_weight: float,
     skin_id = None
     if model.num_skins > 0:
         skin_id = batch["skin_index"].to(device=device, dtype=torch.long)
+    pair_geom = batch["pair_geom"].to(device, non_blocking=True) if model.geometry_gate else None
     gate = gate_logits = None
     if model.output_mode == "gated":
         pred, gate, gate_logits = model(source, source_idx, target_idx, family_id, file_id,
-                                        skin_id=skin_id, return_gate=True)
+                                        skin_id=skin_id, pair_geom=pair_geom, return_gate=True)
     else:
         pred = model(source, source_idx, target_idx, family_id, file_id, skin_id=skin_id)
     l1 = support_masked_l1_loss(pred, target, support)
@@ -161,6 +162,13 @@ def main() -> int:
     p.add_argument("--style-context-dim", type=int, default=0,
                    help="Deployable source-derived style/context embedding width. "
                         "0 disables. Recommended S2 follow-up: 32 or 64.")
+    p.add_argument("--geometry-gate", action="store_true",
+                   help="Add a skin-independent additive gate prior from fixed "
+                        "classic geometry + family id (gated mode only). Targets "
+                        "the S2a failure (content gate never opened on unseen "
+                        "skins). Deployable: no RGB, no skin id.")
+    p.add_argument("--geo-gate-hidden", type=int, default=64,
+                   help="Hidden width of the geometry-gate coordinate MLP.")
     p.add_argument("--sobel-weight", type=float, default=0.25)
     p.add_argument("--output-mode", choices=["residual", "direct", "unbounded", "gated"],
                    default="gated",
@@ -254,6 +262,9 @@ def main() -> int:
         num_skins=num_skins,
         skin_embedding_dim=args.skin_embedding_dim,
         style_context_dim=args.style_context_dim,
+        geometry_gate=args.geometry_gate,
+        geo_gate_hidden=args.geo_gate_hidden,
+        geometry_dim=PAIR_GEOM_DIM,
         output_mode=args.output_mode,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -306,6 +317,7 @@ def main() -> int:
         "num_families": ds.num_families, "max_frames": ds.max_frames,
         "num_skins": num_skins, "skin_id_to_index": ds.skin_id_to_index,
         "style_context_dim": model.style_context_dim,
+        "geometry_gate": model.geometry_gate, "geo_gate_hidden": model.geo_gate_hidden,
         "alt_families": [(f.file_name, f.family, f.num_frames) for f in ds.alt_families],
         "n_items": len(ds), "args": vars(args),
         "heldout_skins": heldout, "split_counts": dict(split_counts),
@@ -316,7 +328,8 @@ def main() -> int:
     print(f"training start: V7StateExpander steps={args.steps} batch={args.batch} "
           f"lr={args.lr} c={args.base_channels} families={ds.num_families} "
           f"skins={len(ds.skin_ids)} (skin_emb={num_skins>0} "
-          f"style_context_dim={model.style_context_dim}) items={len(ds)} "
+          f"style_context_dim={model.style_context_dim} "
+          f"geometry_gate={model.geometry_gate}) items={len(ds)} "
           f"progress_every={args.progress_every}", flush=True)
 
     metrics_file = (out / "metrics.jsonl").open("w")
