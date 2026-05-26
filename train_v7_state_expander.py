@@ -23,6 +23,7 @@ import time as _time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data._utils.collate import default_collate
 
@@ -62,7 +63,8 @@ def save_state_dict(path: Path, state: dict) -> None:
     save_file({k: v.cpu().contiguous() for k, v in state.items()}, str(path))
 
 
-def compute_loss(model, batch, support_masks, device, *, sobel_weight: float):
+def compute_loss(model, batch, support_masks, device, *, sobel_weight: float,
+                 gate_loss_weight: float = 0.0, gate_change_threshold: float = 0.02):
     source = batch["source_rgb"].to(device, non_blocking=True)
     target = batch["target_rgb"].to(device, non_blocking=True)
     support = batch["target_support"].to(device, non_blocking=True)  # [B,1,H,W]
@@ -73,10 +75,10 @@ def compute_loss(model, batch, support_masks, device, *, sobel_weight: float):
     skin_id = None
     if model.num_skins > 0:
         skin_id = batch["skin_index"].to(device=device, dtype=torch.long)
-    gate = None
+    gate = gate_logits = None
     if model.output_mode == "gated":
-        pred, gate = model(source, source_idx, target_idx, family_id, file_id,
-                           skin_id=skin_id, return_gate=True)
+        pred, gate, gate_logits = model(source, source_idx, target_idx, family_id, file_id,
+                                        skin_id=skin_id, return_gate=True)
     else:
         pred = model(source, source_idx, target_idx, family_id, file_id, skin_id=skin_id)
     l1 = support_masked_l1_loss(pred, target, support)
@@ -102,6 +104,19 @@ def compute_loss(model, batch, support_masks, device, *, sobel_weight: float):
                                    else torch.zeros((), device=device)).detach()
             out["gate_unchanged"] = (gate[unchanged].mean() if unchanged.any()
                                      else torch.zeros((), device=device)).detach()
+    # Optional gate supervision: BCE pushing the gate open on changed pixels.
+    if gate_logits is not None and gate_loss_weight > 0.0:
+        sup_b = support > 0.5
+        with torch.no_grad():
+            changed_target = ((source - target).abs().amax(dim=1, keepdim=True)
+                              > gate_change_threshold) & sup_b
+            n_pos = changed_target.sum().clamp_min(1.0)
+            n_neg = (sup_b.sum() - changed_target.sum()).clamp_min(0.0)
+            pos_weight = torch.clamp(n_neg / n_pos, max=10.0)
+        gate_l = F.binary_cross_entropy_with_logits(
+            gate_logits[sup_b], changed_target[sup_b].float(), pos_weight=pos_weight)
+        total = total + gate_loss_weight * gate_l
+        out["gate_loss"] = gate_l.detach()
     out["total"] = total
     out["total_per_item"] = total_pi.detach()
     return out
@@ -141,10 +156,12 @@ def main() -> int:
                    help="ORACLE skin embedding width. 0 disables skin conditioning.")
     p.add_argument("--sobel-weight", type=float, default=0.25)
     p.add_argument("--output-mode", choices=["residual", "direct", "unbounded", "gated"],
-                   default="residual",
-                   help="Output head: residual=clamp(source+tanh(delta)), "
-                        "direct=sigmoid(logits), unbounded=clamp(source+delta), "
-                        "gated=(1-g)*source+g*sigmoid(rgb) with a copy-biased gate.")
+                   default="gated",
+                   help="Output head (default gated, the validated state-expansion "
+                        "head): gated=(1-g)*source+g*sigmoid(rgb) with a copy-biased "
+                        "gate; residual=clamp(source+tanh(delta)); direct=sigmoid(logits); "
+                        "unbounded=clamp(source+delta). residual/direct/unbounded kept "
+                        "for ablation.")
     p.add_argument("--no-identity", action="store_true",
                    help="Exclude i==i pairs entirely (default includes them, "
                         "downweighted by --identity-weight).")
@@ -156,6 +173,14 @@ def main() -> int:
     p.add_argument("--only-family", default=None,
                    help="Restrict training to one family_key (e.g. 'CBUTTONS/play') "
                         "for single-family overfit diagnostics.")
+    p.add_argument("--gate-loss-weight", type=float, default=0.0,
+                   help="Optional supervision for the gated head: BCE pushing the "
+                        "gate open on changed pixels. 0 disables (let reconstruction "
+                        "decide); 0.05 is a reasonable on value. Only used in gated mode.")
+    p.add_argument("--gate-change-threshold", type=float, default=0.02,
+                   help="|source-target| (max over channels) above which a supported "
+                        "pixel is a gate-supervision target. Only used with "
+                        "--gate-loss-weight > 0.")
     p.add_argument("--checkpoint-every", type=int, default=2000)
     p.add_argument("--snapshot-every", type=int, default=0)
     p.add_argument("--progress-every", type=int, default=200)
@@ -242,7 +267,10 @@ def main() -> int:
         if step >= args.steps:
             break
         optimizer.zero_grad(set_to_none=True)
-        losses = compute_loss(model, batch, support_masks, device, sobel_weight=args.sobel_weight)
+        losses = compute_loss(model, batch, support_masks, device,
+                              sobel_weight=args.sobel_weight,
+                              gate_loss_weight=args.gate_loss_weight,
+                              gate_change_threshold=args.gate_change_threshold)
         losses["total"].backward()
         optimizer.step()
         per_item = losses.pop("total_per_item").cpu()

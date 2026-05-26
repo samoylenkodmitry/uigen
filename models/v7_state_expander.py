@@ -78,7 +78,7 @@ class V7StateExpander(nn.Module):
         num_skins: int = 0,
         skin_embedding_dim: int = 0,
         frequencies: tuple[int, ...] = DEFAULT_FREQUENCIES,
-        output_mode: str = "residual",
+        output_mode: str = "gated",
     ):
         super().__init__()
         if output_mode not in _OUTPUT_MODES:
@@ -189,7 +189,7 @@ class V7StateExpander(nn.Module):
         file_id: torch.Tensor,
         skin_id: torch.Tensor | None = None,
         return_gate: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         if source_rgb.dim() != 4 or source_rgb.shape[1] != 3:
             raise ValueError(f"source_rgb must be [B, 3, H, W], got {tuple(source_rgb.shape)}")
         x = self._build_conditioning(
@@ -203,20 +203,22 @@ class V7StateExpander(nn.Module):
         u2 = self.fuse2(torch.cat([F.interpolate(u3, size=f2.shape[-2:], mode="nearest"), f2], dim=1))
         u1 = self.fuse1(torch.cat([F.interpolate(u2, size=f1.shape[-2:], mode="nearest"), f1], dim=1))
         out = self.out_proj(u1)
-        gate = None
+        gate = gate_logits = None
         if self.output_mode == "direct":
             # Predict the target outright; source is still an input channel so
             # the net can copy, but it must learn to.
             result = torch.sigmoid(out)
         elif self.output_mode == "gated":
             rgb = torch.sigmoid(out)
-            gate = torch.sigmoid(self.gate_proj(u1))  # [B, 1, H, W], copy-biased
+            gate_logits = self.gate_proj(u1)            # [B, 1, H, W]
+            gate = torch.sigmoid(gate_logits)            # copy-biased gate in [0, 1]
             result = (1.0 - gate) * source_rgb + gate * rgb
         else:
             # Residual from source: unchanged content is an exact copy when delta=0.
             delta = torch.tanh(out) if self.output_mode == "residual" else out
             result = (source_rgb + delta).clamp(0.0, 1.0)
-        return (result, gate) if return_gate else result
+        # return_gate -> (result, gate[0,1], gate_logits); gate/logits None unless gated.
+        return (result, gate, gate_logits) if return_gate else result
 
 
 __all__ = ["V7StateExpander"]

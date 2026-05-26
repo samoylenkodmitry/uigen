@@ -161,10 +161,10 @@ def test_output_modes_forward_and_range():
             assert out.shape == (2, 3, 9, 9)
             assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
             if mode == "gated":
-                # gate head exists, returns [B,1,H,W] when requested, and inits
-                # near copy (bias -2.0 -> gate well below 0.5).
-                out2, gate = m(src, *idx, return_gate=True)
-                assert gate.shape == (2, 1, 9, 9)
+                # gate head returns ([0,1] gate, logits) when requested, and
+                # inits near copy (bias -2.0 -> gate well below 0.5).
+                out2, gate, gate_logits = m(src, *idx, return_gate=True)
+                assert gate.shape == gate_logits.shape == (2, 1, 9, 9)
                 assert float(gate.mean()) < 0.3
     with pytest.raises(ValueError):
         V7StateExpander(output_mode="bogus", **args)
@@ -189,6 +189,10 @@ def test_compute_loss_gated_path_runs():
     }
     out = tr.compute_loss(model, batch, {}, torch.device("cpu"), sobel_weight=0.25)
     assert {"total", "total_per_item", "gate_mean", "gate_changed", "gate_unchanged"} <= set(out)
+    # With gate supervision on, a gate_loss term appears and total stays finite.
+    out2 = tr.compute_loss(model, batch, {}, torch.device("cpu"), sobel_weight=0.25,
+                           gate_loss_weight=0.05, gate_change_threshold=0.02)
+    assert "gate_loss" in out2 and torch.isfinite(out2["total"])
 
 
 def test_model_forward_with_skin_embedding():
