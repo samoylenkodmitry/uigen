@@ -253,3 +253,42 @@ def test_model_forward_with_skin_embedding():
         assert False, "expected ValueError without skin_id"
     except ValueError:
         pass
+
+
+def test_model_forward_with_style_context_encoder():
+    model = V7StateExpander(num_families=16, max_frames=28, base_channels=8,
+                            file_embedding_dim=4, family_embedding_dim=4, frame_embedding_dim=4,
+                            style_context_dim=8, output_mode="gated")
+    assert int(model.model_version.item()) == 73
+    assert int(model.style_context_dim_buffer.item()) == 8
+    src = torch.rand(2, 3, 9, 9)
+    with torch.no_grad():
+        style = model.style_context_encoder(src)
+        out, gate, logits = model(src, torch.tensor([0, 1]), torch.tensor([2, 0]),
+                                  torch.tensor([5, 5]), torch.tensor([7, 7]),
+                                  return_gate=True)
+    assert style.shape == (2, 8)
+    assert out.shape == (2, 3, 9, 9)
+    assert gate.shape == logits.shape == (2, 1, 9, 9)
+    assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
+
+
+def test_state_expander_eval_kwargs_load_v72_and_v73():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("eval_s2", ROOT / "scripts/21_eval_v7_state_expander_s2.py")
+    eval_s2 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(eval_s2)
+    base_args = dict(num_families=16, max_frames=28, base_channels=8,
+                     file_embedding_dim=4, family_embedding_dim=4, frame_embedding_dim=4,
+                     output_mode="gated")
+
+    v72 = V7StateExpander(**base_args)
+    assert "style_context_dim_buffer" not in v72.state_dict()
+    kwargs72 = eval_s2._model_kwargs(v72.state_dict())
+    assert kwargs72["style_context_dim"] == 0
+    V7StateExpander(**kwargs72).load_state_dict(v72.state_dict())
+
+    v73 = V7StateExpander(**base_args, style_context_dim=8)
+    kwargs73 = eval_s2._model_kwargs(v73.state_dict())
+    assert kwargs73["style_context_dim"] == 8
+    V7StateExpander(**kwargs73).load_state_dict(v73.state_dict())

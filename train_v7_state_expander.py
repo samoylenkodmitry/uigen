@@ -9,6 +9,10 @@ target frame is predicted — so the plain support-masked metric is the right on
 Oracle note: --skin-embedding-dim > 0 conditions on an ORACLE skin id. Fine for
 the Gate S1/S2 capacity test, not deployable.
 
+Deployable context note: --style-context-dim > 0 derives a global style code
+from source_rgb and feeds it to the transition/gate path. It is the S2a failure
+branch: no oracle id, but explicit source-frame style conditioning.
+
 Emits live stdout progress (per project convention): a start line, a periodic
 line every --progress-every steps with running-mean loss / sec-per-step /
 ETA / per-family breakdown, and an end line.
@@ -154,6 +158,9 @@ def main() -> int:
     p.add_argument("--frame-embedding-dim", type=int, default=16)
     p.add_argument("--skin-embedding-dim", type=int, default=0,
                    help="ORACLE skin embedding width. 0 disables skin conditioning.")
+    p.add_argument("--style-context-dim", type=int, default=0,
+                   help="Deployable source-derived style/context embedding width. "
+                        "0 disables. Recommended S2 follow-up: 32 or 64.")
     p.add_argument("--sobel-weight", type=float, default=0.25)
     p.add_argument("--output-mode", choices=["residual", "direct", "unbounded", "gated"],
                    default="gated",
@@ -246,6 +253,7 @@ def main() -> int:
         frame_embedding_dim=args.frame_embedding_dim,
         num_skins=num_skins,
         skin_embedding_dim=args.skin_embedding_dim,
+        style_context_dim=args.style_context_dim,
         output_mode=args.output_mode,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -294,9 +302,10 @@ def main() -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     config = {
-        "model": "V7StateExpander", "model_version": 72,
+        "model": "V7StateExpander", "model_version": int(model.model_version.reshape(-1)[0].item()),
         "num_families": ds.num_families, "max_frames": ds.max_frames,
         "num_skins": num_skins, "skin_id_to_index": ds.skin_id_to_index,
+        "style_context_dim": model.style_context_dim,
         "alt_families": [(f.file_name, f.family, f.num_frames) for f in ds.alt_families],
         "n_items": len(ds), "args": vars(args),
         "heldout_skins": heldout, "split_counts": dict(split_counts),
@@ -306,7 +315,8 @@ def main() -> int:
 
     print(f"training start: V7StateExpander steps={args.steps} batch={args.batch} "
           f"lr={args.lr} c={args.base_channels} families={ds.num_families} "
-          f"skins={len(ds.skin_ids)} (skin_emb={num_skins>0}) items={len(ds)} "
+          f"skins={len(ds.skin_ids)} (skin_emb={num_skins>0} "
+          f"style_context_dim={model.style_context_dim}) items={len(ds)} "
           f"progress_every={args.progress_every}", flush=True)
 
     metrics_file = (out / "metrics.jsonl").open("w")

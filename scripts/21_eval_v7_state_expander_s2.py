@@ -90,14 +90,15 @@ def _region_terms(pred, target, region_b1):
 
 def _model_kwargs(state):
     ver = int(state["model_version"].reshape(-1)[0].item())
-    if ver != 72:
-        raise SystemExit(f"need a V7StateExpander checkpoint (version 72), got {ver}")
+    if ver not in (72, 73):
+        raise SystemExit(f"need a V7StateExpander checkpoint (version 72/73), got {ver}")
     g = lambda k: int(state[k].reshape(-1)[0].item())
     om = _OUTPUT_MODE_BY_CODE.get(g("output_mode_buffer"), "residual") if "output_mode_buffer" in state else "residual"
     return {"num_families": g("num_families_buffer"), "max_frames": g("max_frames_buffer"),
             "base_channels": g("base_channels_buffer"), "file_embedding_dim": g("file_embedding_dim_buffer"),
             "family_embedding_dim": g("family_embedding_dim_buffer"), "frame_embedding_dim": g("frame_embedding_dim_buffer"),
             "num_skins": g("num_skins_buffer"), "skin_embedding_dim": g("skin_embedding_dim_buffer"),
+            "style_context_dim": g("style_context_dim_buffer") if "style_context_dim_buffer" in state else 0,
             "output_mode": om}
 
 

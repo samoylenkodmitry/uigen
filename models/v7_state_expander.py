@@ -13,6 +13,7 @@ learn the transition directly.
     family_id  [B]           (which alternatives family)
     file_id    [B]           (which BMP)
     skin_id    [B] optional   ORACLE skin id (capacity test only, not deployable)
+    style z    [B, D] optional deployable code derived from source_rgb
   ->
     target_rgb [B, 3, H, W]  (the requested frame)
 
@@ -51,6 +52,38 @@ _GATE_BIAS_INIT = -2.0
 _OUTPUT_MODE_BY_CODE = {v: k for k, v in _OUTPUT_MODES.items()}
 
 
+class _SourceStyleEncoder(nn.Module):
+    """Small source-frame encoder for deployable style/context conditioning."""
+
+    def __init__(self, out_dim: int, base_channels: int):
+        super().__init__()
+        width = max(8, min(int(base_channels), int(out_dim)))
+        self.features = nn.Sequential(
+            _conv_block(3, width),
+            _conv_block(width, width, stride=2),
+            _conv_block(width, width, stride=2),
+        )
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        # RGB mean/std gives the code a direct low-frequency style path while
+        # the conv tower captures local material/edge texture.
+        self.proj = nn.Sequential(
+            nn.Linear(width + 6, out_dim),
+            nn.LayerNorm(out_dim),
+            nn.SiLU(inplace=True),
+            nn.Linear(out_dim, out_dim),
+            nn.LayerNorm(out_dim),
+        )
+
+    def forward(self, source_rgb: torch.Tensor) -> torch.Tensor:
+        feat = self.pool(self.features(source_rgb)).flatten(1)
+        rgb = source_rgb.flatten(2)
+        stats = torch.cat(
+            [rgb.mean(dim=2), rgb.std(dim=2, unbiased=False)],
+            dim=1,
+        )
+        return self.proj(torch.cat([feat, stats], dim=1))
+
+
 class V7StateExpander(nn.Module):
     """Conditional frame/state translator for alternatives families.
 
@@ -63,6 +96,10 @@ class V7StateExpander(nn.Module):
         num_skins: ORACLE skin embedding table size; 0 disables skin
             conditioning. >0 expects forward(..., skin_id=...).
         skin_embedding_dim: skin embedding width when num_skins>0.
+        style_context_dim: deployable source-derived style/context width. When
+            >0, the model encodes source_rgb to a global code and broadcasts it
+            into the transition/gate path. This is not an oracle id and is safe
+            for unseen skins.
         frequencies: Fourier frequencies for spatial coords.
     """
 
@@ -77,6 +114,7 @@ class V7StateExpander(nn.Module):
         frame_embedding_dim: int = 16,
         num_skins: int = 0,
         skin_embedding_dim: int = 0,
+        style_context_dim: int = 0,
         frequencies: tuple[int, ...] = DEFAULT_FREQUENCIES,
         output_mode: str = "gated",
     ):
@@ -94,6 +132,9 @@ class V7StateExpander(nn.Module):
         self.skin_embedding_dim = int(skin_embedding_dim) if self.num_skins > 0 else 0
         if self.num_skins > 0 and self.skin_embedding_dim <= 0:
             raise ValueError("skin_embedding_dim must be >0 when num_skins>0")
+        self.style_context_dim = int(style_context_dim)
+        if self.style_context_dim < 0:
+            raise ValueError("style_context_dim must be >=0")
         self.frequencies = tuple(int(f) for f in frequencies)
 
         self.file_embedding = nn.Embedding(len(TRAINABLE_EXPORT_SPECS), self.file_embedding_dim)
@@ -104,6 +145,12 @@ class V7StateExpander(nn.Module):
             self.skin_embedding = nn.Embedding(self.num_skins, self.skin_embedding_dim)
         else:
             self.skin_embedding = None
+        if self.style_context_dim > 0:
+            self.style_context_encoder = _SourceStyleEncoder(
+                self.style_context_dim, base_channels=self.base_channels
+            )
+        else:
+            self.style_context_encoder = None
 
         coord_ch = _coord_channels(self.frequencies)
         in_ch = (
@@ -113,6 +160,7 @@ class V7StateExpander(nn.Module):
             + self.family_embedding_dim
             + 2 * self.frame_embedding_dim
             + self.skin_embedding_dim
+            + self.style_context_dim
         )
 
         c1, c2, c3, c4 = (base_channels, base_channels * 2, base_channels * 4, base_channels * 8)
@@ -133,7 +181,8 @@ class V7StateExpander(nn.Module):
         else:
             self.gate_proj = None
 
-        self.register_buffer("model_version", torch.tensor([72], dtype=torch.int32))
+        model_version = 73 if self.style_context_dim > 0 else 72
+        self.register_buffer("model_version", torch.tensor([model_version], dtype=torch.int32))
         self.register_buffer(
             "output_mode_buffer", torch.tensor([_OUTPUT_MODES[output_mode]], dtype=torch.int32)
         )
@@ -148,6 +197,10 @@ class V7StateExpander(nn.Module):
             ("skin_embedding_dim_buffer", self.skin_embedding_dim),
         ):
             self.register_buffer(name, torch.tensor([val], dtype=torch.int32))
+        if self.style_context_dim > 0:
+            self.register_buffer(
+                "style_context_dim_buffer", torch.tensor([self.style_context_dim], dtype=torch.int32)
+            )
         self.register_buffer(
             "frequencies_buffer", torch.tensor(list(self.frequencies), dtype=torch.int32)
         )
@@ -172,6 +225,8 @@ class V7StateExpander(nn.Module):
             self._map(self.frame_embedding(source_idx), b, h, w),
             self._map(self.frame_embedding(target_idx), b, h, w),
         ]
+        if self.style_context_encoder is not None:
+            channels.append(self._map(self.style_context_encoder(source_rgb), b, h, w))
         if self.skin_embedding is not None:
             if skin_id is None:
                 raise ValueError("skin_id is required when num_skins>0")
