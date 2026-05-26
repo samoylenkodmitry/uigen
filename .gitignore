@@ -26,3 +26,6 @@ out_skin/
 
 !.gitkeep
 !cranamp_cli/cranamp/assets/winamp.wsz
+
+# V8 product eval inputs (generated mockups / real-skin renders) — not committed
+eval_mockups/
