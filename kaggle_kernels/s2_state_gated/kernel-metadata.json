@@ -1,0 +1,16 @@
+{
+  "id": "dmitriisamoilenko/uigen-kaggle-s2-state-gated",
+  "title": "uigen-kaggle-s2-state-gated",
+  "code_file": "uigen_kaggle_s2_state_gated.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "machine_shape": "NvidiaTeslaT4",
+  "enable_internet": true,
+  "dataset_sources": ["dmitriisamoilenko/uigen-data"],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

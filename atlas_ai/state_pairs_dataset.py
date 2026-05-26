@@ -100,7 +100,24 @@ class StatePairsDataset(Dataset):
         state_families_path: str | Path,
         *,
         include_identity: bool = True,
+        heldout_skins: list[str] | set[str] | None = None,
+        heldout_pair_fraction: float = 0.0,
+        pair_holdout_min_pairs: int = 20,
+        local_delta: int = 2,
+        split_seed: int = 0,
     ):
+        """Args (S2 split additions, all optional — defaults reproduce S1):
+            heldout_skins: skins whose every pair is split 'heldout' (unseen
+                style; never trained). The deployability test.
+            heldout_pair_fraction: fraction of each large family's off-diagonal
+                (i,j) pairs held out across ALL train skins for the
+                seen-skin / unseen-pair split. Only applied to families with
+                >= pair_holdout_min_pairs off-diagonal pairs (2-frame buttons
+                keep all pairs).
+            local_delta: |i-j| <= local_delta is a 'local' transition (used by
+                the mixed local/global pair sampler for big frame strips).
+            split_seed: deterministic held-out-pair selection.
+        """
         if not skin_sources:
             raise ValueError("StatePairsDataset requires at least one skin source")
         self.skin_ids: list[str] = sorted(skin_sources.keys())
@@ -119,8 +136,26 @@ class StatePairsDataset(Dataset):
             fn: m.cpu().numpy().astype(np.uint8) for fn, m in load_support_masks().items()
         }
         self.include_identity = bool(include_identity)
-        # items: (skin_id, family_id, source_idx, target_idx)
+        self.heldout_skins: set[str] = set(heldout_skins or [])
+        self.local_delta = int(local_delta)
+        # Held-out (i,j) pairs per family for the seen-skin/unseen-pair split,
+        # consistent across all train skins. Only for big families.
+        import random as _random
+        rng = _random.Random(split_seed)
+        self.heldout_pairs: dict[str, set[tuple[int, int]]] = {}
+        for fam in self.alt_families:
+            offdiag = [(i, j) for i in range(fam.num_frames)
+                       for j in range(fam.num_frames) if i != j]
+            if heldout_pair_fraction > 0 and len(offdiag) >= pair_holdout_min_pairs:
+                k = max(1, int(round(heldout_pair_fraction * len(offdiag))))
+                self.heldout_pairs[fam.key] = set(rng.sample(offdiag, k))
+            else:
+                self.heldout_pairs[fam.key] = set()
+        # items: (skin_id, family_id, source_idx, target_idx) + parallel split /
+        # locality labels.
         self.items: list[tuple[str, int, int, int]] = []
+        self.split_of: list[str] = []
+        self.is_local: list[bool] = []
         for sid in self.skin_ids:
             for fam in self.alt_families:
                 n = fam.num_frames
@@ -129,12 +164,54 @@ class StatePairsDataset(Dataset):
                         if not self.include_identity and i == j:
                             continue
                         self.items.append((sid, fam.family_id, i, j))
+                        if sid in self.heldout_skins:
+                            split = "heldout"
+                        elif (i, j) in self.heldout_pairs[fam.key]:
+                            split = "seen_val"
+                        else:
+                            split = "train"
+                        self.split_of.append(split)
+                        self.is_local.append(abs(i - j) <= self.local_delta)
         # Batch grouping key: unique family_key (file/family) so every batch
         # shares one frame size and the key matches family_key used in eval /
         # --only-family filters.
         self.group_keys: list[str] = [
             self.alt_families[fid].key for (_sid, fid, _i, _j) in self.items
         ]
+
+    def training_item_weights(self, *, local_pair_prob: float = 0.5) -> list[float]:
+        """Per-index within-family sampling weights for TRAIN items only.
+
+        Non-train items (seen_val / heldout) get weight 0 so the sampler never
+        draws them. Within each family's train pairs, local and global pairs
+        are balanced to local_pair_prob vs (1 - local_pair_prob) so a big frame
+        strip learns both neighbour moves and long jumps. (Per-family difficulty
+        weighting is applied separately via the sampler's key_weights.)
+        """
+        from collections import defaultdict
+        n_local: dict[str, int] = defaultdict(int)
+        n_global: dict[str, int] = defaultdict(int)
+        for idx, (_sid, fid, _i, _j) in enumerate(self.items):
+            if self.split_of[idx] != "train":
+                continue
+            key = self.alt_families[fid].key
+            if self.is_local[idx]:
+                n_local[key] += 1
+            else:
+                n_global[key] += 1
+        weights = [0.0] * len(self.items)
+        for idx, (_sid, fid, _i, _j) in enumerate(self.items):
+            if self.split_of[idx] != "train":
+                continue
+            key = self.alt_families[fid].key
+            nl, ng = n_local[key], n_global[key]
+            if nl and ng:
+                weights[idx] = (local_pair_prob / nl) if self.is_local[idx] \
+                    else ((1.0 - local_pair_prob) / ng)
+            else:  # only one locality class present -> uniform
+                denom = nl if self.is_local[idx] else ng
+                weights[idx] = 1.0 / max(1, denom)
+        return weights
 
     def __len__(self) -> int:
         return len(self.items)
@@ -166,6 +243,8 @@ class StatePairsDataset(Dataset):
             "skin_id": sid,
             "skin_index": self.skin_id_to_index[sid],
             "is_identity": int(i == j),
+            "split": self.split_of[index],
+            "is_local": int(self.is_local[index]),
         }
 
 

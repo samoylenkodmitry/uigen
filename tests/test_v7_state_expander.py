@@ -109,6 +109,48 @@ def test_family_keys_are_unique_across_files():
     assert "EQMAIN/slider_frames" in keys
 
 
+def test_s2_skin_split_labels():
+    d = str(DEFAULT_SKIN)
+    ds = StatePairsDataset({"a": d, "b": d, "c": d}, CONFIG,
+                           include_identity=False, heldout_skins=["c"])
+    for idx, (sid, _fid, _i, _j) in enumerate(ds.items):
+        assert ds.split_of[idx] == ("heldout" if sid == "c" else "train")
+    assert set(ds.split_of) == {"train", "heldout"}
+
+
+def test_s2_pair_holdout_only_big_families():
+    d = str(DEFAULT_SKIN)
+    ds = StatePairsDataset({"a": d, "b": d}, CONFIG, include_identity=False,
+                           heldout_pair_fraction=0.2, split_seed=0)
+    # 28-frame slider family gets held-out pairs; 2-frame button does not.
+    assert ds.heldout_pairs["VOLUME/slider_frames"]
+    assert not ds.heldout_pairs["CBUTTONS/play"]
+    # held-out (i,j) pairs land in seen_val on every (train) skin.
+    for idx, (_sid, fid, i, j) in enumerate(ds.items):
+        fk = ds.alt_families[fid].key
+        if (i, j) in ds.heldout_pairs[fk]:
+            assert ds.split_of[idx] == "seen_val"
+
+
+def test_s2_training_item_weights_exclude_nontrain_and_balance():
+    d = str(DEFAULT_SKIN)
+    ds = StatePairsDataset({"a": d, "b": d}, CONFIG, include_identity=False,
+                           heldout_skins=["b"], heldout_pair_fraction=0.2, split_seed=0)
+    w = ds.training_item_weights(local_pair_prob=0.5)
+    for idx in range(len(ds.items)):
+        if ds.split_of[idx] != "train":
+            assert w[idx] == 0.0
+        else:
+            assert w[idx] > 0.0
+    # Within VOLUME (28-frame), train local vs global weight mass each ~0.5.
+    vol = next(f.family_id for f in ds.alt_families if f.key == "VOLUME/slider_frames")
+    loc = sum(w[idx] for idx, (_s, fid, _i, _j) in enumerate(ds.items)
+              if fid == vol and ds.split_of[idx] == "train" and ds.is_local[idx])
+    glob = sum(w[idx] for idx, (_s, fid, _i, _j) in enumerate(ds.items)
+               if fid == vol and ds.split_of[idx] == "train" and not ds.is_local[idx])
+    assert abs(loc - 0.5) < 1e-6 and abs(glob - 0.5) < 1e-6
+
+
 def test_weighted_samekey_balances_unequal_groups():
     """Equal key weights -> a 4-item group gets ~as many batches as a 100-item
     group (fixes the pair-count exposure bias)."""

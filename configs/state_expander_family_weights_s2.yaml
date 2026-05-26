@@ -1,0 +1,29 @@
+# S2 StateFamilyExpander per-family difficulty weights (sampler key_weights).
+#
+# These compensate for the small / high-contrast 2-frame button families that
+# under-converged in S1 under equal family-balancing (CBUTTONS/eject was the
+# sole S1 blocker, but overfits alone to changed_hit5 1.0). They deliberately
+# do NOT starve the 28-frame slider families — sliders stay slightly above 1.0
+# because pair-coverage matters there too. Families omitted default to 1.0.
+#
+# Re-tune only after ~30k-50k of S2 if a family clearly lags (see per-family
+# changed_hit5 in the S2 eval). Keyed by family_key = "<FILE>/<family>".
+
+CBUTTONS/eject: 2.5
+CBUTTONS/play: 1.5
+CBUTTONS/prev: 1.2
+CBUTTONS/next: 1.2
+CBUTTONS/pause: 1.2
+CBUTTONS/stop: 1.2
+
+VOLUME/slider_frames: 1.3
+BALANCE/slider_frames: 1.3
+EQMAIN/slider_frames: 1.4
+
+SHUFREP/repeat: 0.8
+SHUFREP/shuffle: 0.8
+SHUFREP/eq_toggle: 0.8
+MONOSTER/indicators: 0.8
+PLAYPAUS/status: 0.8
+EQMAIN/on_button: 0.8
+EQMAIN/auto_button: 0.8

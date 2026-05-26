@@ -181,6 +181,24 @@ def main() -> int:
                    help="|source-target| (max over channels) above which a supported "
                         "pixel is a gate-supervision target. Only used with "
                         "--gate-loss-weight > 0.")
+    # --- S2 split / sampling controls (default off -> S1 behavior) ---
+    p.add_argument("--heldout-skins", default=None,
+                   help="Comma-separated skin ids held out entirely for the "
+                        "deployability (unseen-style) eval split. Never trained.")
+    p.add_argument("--heldout-skin-fraction", type=float, default=0.0,
+                   help="If --heldout-skins not given, deterministically hold out "
+                        "this fraction of skins (by --seed).")
+    p.add_argument("--seen-pair-val-fraction", type=float, default=0.0,
+                   help="Fraction of each big family's (i,j) pairs held out across "
+                        "train skins for the seen-skin/unseen-pair eval split.")
+    p.add_argument("--family-weights", default=None,
+                   help="YAML mapping family_key -> difficulty weight (sampler "
+                        "key_weights). Missing families default to 1.0.")
+    p.add_argument("--local-pair-prob", type=float, default=0.5,
+                   help="Within a family, probability mass on local (|i-j|<=delta) "
+                        "transitions vs global. Balances neighbour vs jump moves.")
+    p.add_argument("--local-delta", type=int, default=2,
+                   help="|i-j| <= local-delta counts as a local transition.")
     p.add_argument("--checkpoint-every", type=int, default=2000)
     p.add_argument("--snapshot-every", type=int, default=0)
     p.add_argument("--progress-every", type=int, default=200)
@@ -192,12 +210,33 @@ def main() -> int:
     device = torch.device(args.device)
     torch.manual_seed(args.seed)
     skin_sources = parse_skin_sources(args.skin_sources)
+    # Resolve held-out skins (explicit list wins; else a deterministic fraction).
+    all_skin_ids = sorted(skin_sources.keys())
+    if args.heldout_skins:
+        heldout = [s.strip() for s in args.heldout_skins.split(",") if s.strip()]
+        unknown = [s for s in heldout if s not in skin_sources]
+        if unknown:
+            raise SystemExit(f"--heldout-skins not in skin set: {unknown}")
+    elif args.heldout_skin_fraction > 0:
+        import random as _r
+        k = max(1, int(round(args.heldout_skin_fraction * len(all_skin_ids))))
+        heldout = sorted(_r.Random(args.seed).sample(all_skin_ids, k))
+    else:
+        heldout = []
     ds = StatePairsDataset(
         skin_sources=skin_sources,
         state_families_path=args.state_families,
         include_identity=not args.no_identity,
+        heldout_skins=heldout,
+        heldout_pair_fraction=args.seen_pair_val_fraction,
+        local_delta=args.local_delta,
+        split_seed=args.seed,
     )
     num_skins = len(ds.skin_ids) if args.skin_embedding_dim > 0 else 0
+    s2_mode = bool(heldout or args.seen_pair_val_fraction > 0 or args.family_weights)
+    from collections import Counter as _Counter
+    split_counts = _Counter(ds.split_of)
+    print(f"splits: {dict(split_counts)}; heldout_skins={heldout or '(none)'}", flush=True)
     model = V7StateExpander(
         num_families=ds.num_families,
         max_frames=ds.max_frames,
@@ -213,28 +252,44 @@ def main() -> int:
     support_masks = load_support_masks()
 
     generator = torch.Generator().manual_seed(args.seed)
-    # Family-balanced exposure: equal probability per (file,family) so eject's
-    # 4 pairs and VOLUME's 784 pairs get equal gradient steps. Identity pairs
-    # are downweighted within each family (transitions are the S1 task).
-    item_weights = [
-        (args.identity_weight if i == j else 1.0) for (_sid, _fid, i, j) in ds.items
-    ]
-    key_weights = None
-    if args.only_family:
-        all_keys = {f.key for f in ds.alt_families}
-        if args.only_family not in all_keys:
-            raise SystemExit(f"--only-family {args.only_family!r} not in {sorted(all_keys)}")
-        key_weights = {k: (1.0 if k == args.only_family else 0.0) for k in all_keys}
-        print(f"--only-family: restricting to {args.only_family}", flush=True)
+    all_keys = {f.key for f in ds.alt_families}
+    if s2_mode:
+        # S2: train only on the 'train' split (item_weights zero elsewhere),
+        # balance local/global transitions within each family, and apply
+        # per-family difficulty weights as the sampler's key_weights.
+        item_weights = ds.training_item_weights(local_pair_prob=args.local_pair_prob)
+        family_weights = {}
+        if args.family_weights:
+            import yaml as _yaml
+            family_weights = {str(k): float(v) for k, v in
+                              (_yaml.safe_load(Path(args.family_weights).read_text()) or {}).items()}
+        key_weights = {k: family_weights.get(k, 1.0) for k in all_keys}
+        if args.only_family:
+            key_weights = {k: (key_weights[k] if k == args.only_family else 0.0) for k in all_keys}
+        print(f"S2 sampling: train-split only, local_pair_prob={args.local_pair_prob}, "
+              f"family difficulty weights from "
+              f"{args.family_weights or '(uniform)'}", flush=True)
+        nonuniform = {k: family_weights[k] for k in sorted(family_weights) if family_weights[k] != 1.0}
+        if nonuniform:
+            print(f"  family_weights != 1.0: {nonuniform}", flush=True)
+    else:
+        # S1 behavior: family-balanced, identity downweighted.
+        item_weights = [
+            (args.identity_weight if i == j else 1.0) for (_sid, _fid, i, j) in ds.items
+        ]
+        key_weights = None
+        if args.only_family:
+            if args.only_family not in all_keys:
+                raise SystemExit(f"--only-family {args.only_family!r} not in {sorted(all_keys)}")
+            key_weights = {k: (1.0 if k == args.only_family else 0.0) for k in all_keys}
+            print(f"--only-family: restricting to {args.only_family}", flush=True)
     sampler = WeightedSameKeyBatchSampler(
         ds.group_keys, batch_size=args.batch, num_batches=args.steps,
         key_weights=key_weights, item_weights=item_weights, generator=generator,
     )
     loader = DataLoader(ds, batch_sampler=sampler, num_workers=args.num_workers,
                         collate_fn=default_collate)
-    print(f"family-balanced sampling: {len(sampler.keys)} families, equal prob "
-          f"({1.0/len(sampler.keys):.4f} each); identity_weight="
-          f"{0.0 if args.no_identity else args.identity_weight}", flush=True)
+    print(f"family-balanced sampling: {len(sampler.keys)} families", flush=True)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -244,6 +299,8 @@ def main() -> int:
         "num_skins": num_skins, "skin_id_to_index": ds.skin_id_to_index,
         "alt_families": [(f.file_name, f.family, f.num_frames) for f in ds.alt_families],
         "n_items": len(ds), "args": vars(args),
+        "heldout_skins": heldout, "split_counts": dict(split_counts),
+        "s2_mode": s2_mode,
     }
     (out / "config.json").write_text(json.dumps(config, indent=2, sort_keys=True))
 
