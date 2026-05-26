@@ -42,7 +42,12 @@ from models.v7_completer import (
 #   residual  - clamp(source + tanh(delta)); bounded residual (the original).
 #   direct    - sigmoid(logits); predict the target outright, no residual base.
 #   unbounded - clamp(source + delta); residual with no tanh bound (diagnostic).
-_OUTPUT_MODES = {"residual": 0, "direct": 1, "unbounded": 2}
+#   gated     - out = (1-g)*source + g*sigmoid(rgb); g a learned per-pixel
+#               overwrite gate. Gate bias inits negative so it starts near copy
+#               (slider strength) and opens only where the state changes
+#               (high-contrast precision). Combines residual + direct.
+_OUTPUT_MODES = {"residual": 0, "direct": 1, "unbounded": 2, "gated": 3}
+_GATE_BIAS_INIT = -2.0
 _OUTPUT_MODE_BY_CODE = {v: k for k, v in _OUTPUT_MODES.items()}
 
 
@@ -119,6 +124,14 @@ class V7StateExpander(nn.Module):
         self.fuse2 = _conv_block(c3 + c2, c2)
         self.fuse1 = _conv_block(c2 + c1, c1)
         self.out_proj = nn.Conv2d(c1, 3, kernel_size=1)
+        # Gated mode adds a per-pixel overwrite gate head, biased toward copy.
+        # Only built for output_mode=="gated" so other modes' state_dicts are
+        # unchanged (older checkpoints still load).
+        if output_mode == "gated":
+            self.gate_proj = nn.Conv2d(c1, 1, kernel_size=1)
+            nn.init.constant_(self.gate_proj.bias, _GATE_BIAS_INIT)
+        else:
+            self.gate_proj = None
 
         self.register_buffer("model_version", torch.tensor([72], dtype=torch.int32))
         self.register_buffer(
@@ -175,7 +188,8 @@ class V7StateExpander(nn.Module):
         family_id: torch.Tensor,
         file_id: torch.Tensor,
         skin_id: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        return_gate: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
         if source_rgb.dim() != 4 or source_rgb.shape[1] != 3:
             raise ValueError(f"source_rgb must be [B, 3, H, W], got {tuple(source_rgb.shape)}")
         x = self._build_conditioning(
@@ -189,13 +203,20 @@ class V7StateExpander(nn.Module):
         u2 = self.fuse2(torch.cat([F.interpolate(u3, size=f2.shape[-2:], mode="nearest"), f2], dim=1))
         u1 = self.fuse1(torch.cat([F.interpolate(u2, size=f1.shape[-2:], mode="nearest"), f1], dim=1))
         out = self.out_proj(u1)
+        gate = None
         if self.output_mode == "direct":
             # Predict the target outright; source is still an input channel so
             # the net can copy, but it must learn to.
-            return torch.sigmoid(out)
-        # Residual from source: unchanged content is an exact copy when delta=0.
-        delta = torch.tanh(out) if self.output_mode == "residual" else out
-        return (source_rgb + delta).clamp(0.0, 1.0)
+            result = torch.sigmoid(out)
+        elif self.output_mode == "gated":
+            rgb = torch.sigmoid(out)
+            gate = torch.sigmoid(self.gate_proj(u1))  # [B, 1, H, W], copy-biased
+            result = (1.0 - gate) * source_rgb + gate * rgb
+        else:
+            # Residual from source: unchanged content is an exact copy when delta=0.
+            delta = torch.tanh(out) if self.output_mode == "residual" else out
+            result = (source_rgb + delta).clamp(0.0, 1.0)
+        return (result, gate) if return_gate else result
 
 
 __all__ = ["V7StateExpander"]

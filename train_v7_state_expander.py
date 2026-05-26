@@ -73,7 +73,12 @@ def compute_loss(model, batch, support_masks, device, *, sobel_weight: float):
     skin_id = None
     if model.num_skins > 0:
         skin_id = batch["skin_index"].to(device=device, dtype=torch.long)
-    pred = model(source, source_idx, target_idx, family_id, file_id, skin_id=skin_id)
+    gate = None
+    if model.output_mode == "gated":
+        pred, gate = model(source, source_idx, target_idx, family_id, file_id,
+                           skin_id=skin_id, return_gate=True)
+    else:
+        pred = model(source, source_idx, target_idx, family_id, file_id, skin_id=skin_id)
     l1 = support_masked_l1_loss(pred, target, support)
     l1_pi = support_masked_l1_per_item(pred, target, support)
     out = {"l1": l1.detach()}
@@ -87,6 +92,16 @@ def compute_loss(model, batch, support_masks, device, *, sobel_weight: float):
         total = l1
         total_pi = l1_pi
         out["sobel"] = torch.zeros((), device=device)
+    if gate is not None:
+        with torch.no_grad():
+            changed = ((source - target).abs().amax(dim=1, keepdim=True) > 0.02) & (support > 0.5)
+            unchanged = (~((source - target).abs().amax(dim=1, keepdim=True) > 0.02)) & (support > 0.5)
+            out["gate_mean"] = gate.mean().detach()
+            out["gate_p90"] = torch.quantile(gate.flatten(), 0.9).detach()
+            out["gate_changed"] = (gate[changed].mean() if changed.any()
+                                   else torch.zeros((), device=device)).detach()
+            out["gate_unchanged"] = (gate[unchanged].mean() if unchanged.any()
+                                     else torch.zeros((), device=device)).detach()
     out["total"] = total
     out["total_per_item"] = total_pi.detach()
     return out
@@ -125,10 +140,11 @@ def main() -> int:
     p.add_argument("--skin-embedding-dim", type=int, default=0,
                    help="ORACLE skin embedding width. 0 disables skin conditioning.")
     p.add_argument("--sobel-weight", type=float, default=0.25)
-    p.add_argument("--output-mode", choices=["residual", "direct", "unbounded"],
+    p.add_argument("--output-mode", choices=["residual", "direct", "unbounded", "gated"],
                    default="residual",
                    help="Output head: residual=clamp(source+tanh(delta)), "
-                        "direct=sigmoid(logits), unbounded=clamp(source+delta).")
+                        "direct=sigmoid(logits), unbounded=clamp(source+delta), "
+                        "gated=(1-g)*source+g*sigmoid(rgb) with a copy-biased gate.")
     p.add_argument("--no-identity", action="store_true",
                    help="Exclude i==i pairs entirely (default includes them, "
                         "downweighted by --identity-weight).")
@@ -260,6 +276,10 @@ def main() -> int:
             counts = sorted(fam_batch_counts.items(), key=lambda kv: kv[1])
             print("  family_batches(min->max): "
                   + " ".join(f"{k}={v}" for k, v in counts), flush=True)
+            if "gate_mean" in logged:
+                print(f"  gate: mean={logged['gate_mean']:.3f} p90={logged['gate_p90']:.3f} "
+                      f"on_changed={logged['gate_changed']:.3f} "
+                      f"on_unchanged={logged['gate_unchanged']:.3f}", flush=True)
             last_t = now
     save_state_dict(out / "last.safetensors", model.state_dict())
     metrics_file.close()

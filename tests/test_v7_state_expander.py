@@ -151,17 +151,44 @@ def test_output_modes_forward_and_range():
     args = dict(num_families=16, max_frames=28, base_channels=8,
                 file_embedding_dim=4, family_embedding_dim=4, frame_embedding_dim=4)
     src = torch.rand(2, 3, 9, 9)
-    for mode in ("residual", "direct", "unbounded"):
+    for mode in ("residual", "direct", "unbounded", "gated"):
         m = V7StateExpander(output_mode=mode, **args)
         assert m.output_mode == mode
-        assert int(m.output_mode_buffer.item()) in (0, 1, 2)
+        assert int(m.output_mode_buffer.item()) in (0, 1, 2, 3)
+        idx = (torch.tensor([0, 1]), torch.tensor([1, 0]), torch.tensor([0, 1]), torch.tensor([9, 9]))
         with torch.no_grad():
-            out = m(src, torch.tensor([0, 1]), torch.tensor([1, 0]),
-                    torch.tensor([0, 1]), torch.tensor([9, 9]))
-        assert out.shape == (2, 3, 9, 9)
-        assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
+            out = m(src, *idx)
+            assert out.shape == (2, 3, 9, 9)
+            assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
+            if mode == "gated":
+                # gate head exists, returns [B,1,H,W] when requested, and inits
+                # near copy (bias -2.0 -> gate well below 0.5).
+                out2, gate = m(src, *idx, return_gate=True)
+                assert gate.shape == (2, 1, 9, 9)
+                assert float(gate.mean()) < 0.3
     with pytest.raises(ValueError):
         V7StateExpander(output_mode="bogus", **args)
+
+
+def test_compute_loss_gated_path_runs():
+    """Guards the trainer's gated branch (forward call must pass family_id)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("tr_se", ROOT / "train_v7_state_expander.py")
+    tr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tr)
+    model = V7StateExpander(num_families=16, max_frames=28, base_channels=8,
+                            file_embedding_dim=4, family_embedding_dim=4,
+                            frame_embedding_dim=4, output_mode="gated")
+    b = 2
+    batch = {
+        "source_rgb": torch.rand(b, 3, 9, 9), "target_rgb": torch.rand(b, 3, 9, 9),
+        "target_support": torch.ones(b, 1, 9, 9),
+        "source_idx": torch.tensor([0, 1]), "target_idx": torch.tensor([1, 0]),
+        "family_id": torch.tensor([0, 1]), "file_id": torch.tensor([9, 9]),
+        "skin_index": torch.tensor([0, 0]),
+    }
+    out = tr.compute_loss(model, batch, {}, torch.device("cpu"), sobel_weight=0.25)
+    assert {"total", "total_per_item", "gate_mean", "gate_changed", "gate_unchanged"} <= set(out)
 
 
 def test_model_forward_with_skin_embedding():
