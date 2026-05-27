@@ -61,12 +61,22 @@ def save_exported_tensors(
     *,
     default_skin: str | Path = "assets/default_skin",
     package: bool = True,
+    text_overrides: dict[str, str] | None = None,
 ) -> Path | None:
-    """Write trainable BMPs plus runtime defaults. Returns skin.wsz when packaged."""
+    """Write trainable BMPs plus runtime defaults. Returns skin.wsz when packaged.
+
+    text_overrides maps a runtime text file (e.g. "PLEDIT.TXT") to content
+    written verbatim instead of copying the default — used to emit a mockup-
+    derived PLEDIT.TXT (playlist colors).
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     default_skin = Path(default_skin)
     written: set[str] = set()
+    for name, content in (text_overrides or {}).items():
+        cname = canonical_display_name(name)
+        (out / cname).write_text(content, encoding="latin-1")
+        written.add(normalize_name(cname))
     for spec in TRAINABLE_EXPORT_SPECS:
         tensor = files.get(spec.file_name)
         if tensor is None:

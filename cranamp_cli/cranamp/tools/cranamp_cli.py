@@ -527,6 +527,52 @@ def draw_main_histogram(renderer: Renderer, origin: list[int], scale: float, val
         renderer.fill_rect((*scaled_xy(origin, (x, y), scale), max(1.0, (bar_w - 1.4) * scale), height * scale), color)
 
 
+_PLEDIT_DEFAULT_COLORS = {
+    "normal": (93, 184, 207, 255),
+    "current": (232, 238, 220, 255),
+    "normalbg": (0, 0, 0, 255),
+    "selectedbg": (66, 53, 30, 255),
+}
+
+
+def _hex_rgba(value: str | None, default: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    s = (value or "").strip().lstrip("#")
+    if len(s) >= 6:
+        try:
+            v = int(s[:6], 16)
+            return ((v >> 16) & 255, (v >> 8) & 255, v & 255, 255)
+        except ValueError:
+            pass
+    return default
+
+
+def pledit_colors(renderer: Renderer) -> dict[str, tuple[int, int, int, int]]:
+    """Playlist text/background colors from the skin's PLEDIT.TXT [Text] section.
+
+    Classic Winamp configures these (Normal/Current/NormalBG/SelectedBG) in
+    PLEDIT.TXT, not the bitmaps. Falls back to the historical hardcoded values
+    when absent/unparseable so behavior is unchanged for skins without it.
+    """
+    colors = dict(_PLEDIT_DEFAULT_COLORS)
+    key = normalize_name("PLEDIT.TXT")
+    asset = renderer.assets.get(key) or renderer.default_assets.get(key)
+    if asset is None:
+        return colors
+    try:
+        text = asset.data.decode("latin-1", "ignore")
+    except Exception:  # noqa: BLE001
+        return colors
+    kv = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if "=" in line and not line.startswith("["):
+            k, v = line.split("=", 1)
+            kv[k.strip().lower()] = v.strip()
+    for name in ("normal", "current", "normalbg", "selectedbg"):
+        colors[name] = _hex_rgba(kv.get(name), colors[name])
+    return colors
+
+
 def draw_playlist_entries(
     renderer: Renderer,
     origin: list[int],
@@ -534,13 +580,15 @@ def draw_playlist_entries(
     entries: list[str],
     selected_row: int,
     list_h: int,
+    colors: dict[str, tuple[int, int, int, int]] | None = None,
 ) -> None:
+    colors = colors or _PLEDIT_DEFAULT_COLORS
     list_w = 243
     layer = Image.new("RGBA", (list_w, list_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     font = ImageFont.load_default()
     for row, entry in enumerate(entries[: list_h // 11]):
-        color = (232, 238, 220, 255) if row == selected_row else (93, 184, 207, 255)
+        color = colors["current"] if row == selected_row else colors["normal"]
         draw.text((4, 2 + row * 11), entry[:38], font=font, fill=color)
     resized = layer.resize((max(1, round(list_w * scale)), max(1, round(list_h * scale))), Image.Resampling.NEAREST)
     renderer.composite_procedural(resized, (round(origin[0] + 12 * scale), round(origin[1] + 20 * scale)))
@@ -811,9 +859,10 @@ def render_playlist(renderer: Renderer, params: dict) -> None:
     right_x = width - 20
     list_h = bottom_y - 20
 
+    pl_colors = pledit_colors(renderer)
     renderer.mark_rect(42, (ox, oy, width, height), scale)
     renderer.fill_rect((ox, oy, width * scale, height * scale), (5, 5, 5, 255))
-    renderer.fill_rect((*scaled_xy(origin, (12, 20), scale), 243 * scale, list_h * scale), (0, 0, 0, 255))
+    renderer.fill_rect((*scaled_xy(origin, (12, 20), scale), 243 * scale, list_h * scale), pl_colors["normalbg"])
 
     renderer.blit("PLEDIT", "PLEDIT.bmp", (0, 21, 25, 20), (ox, oy), scale)
     for tx in [25, 50, 75, 175, 200, 225]:
@@ -830,7 +879,7 @@ def render_playlist(renderer: Renderer, params: dict) -> None:
     renderer.blit("PLEDIT", "PLEDIT.bmp", (126, 72, 150, 38), scaled_xy(origin, (125, bottom_y), scale), scale)
 
     selected_y = 22 + min(17, int(state["playlist_selected_row"])) * 11
-    renderer.fill_rect((*scaled_xy(origin, (12, selected_y), scale), 243 * scale, 9 * scale), (66, 53, 30, 255))
+    renderer.fill_rect((*scaled_xy(origin, (12, selected_y), scale), 243 * scale, 9 * scale), pl_colors["selectedbg"])
     draw_playlist_entries(
         renderer,
         origin,
@@ -838,6 +887,7 @@ def render_playlist(renderer: Renderer, params: dict) -> None:
         params.get("playlist_entries", []),
         min(17, int(state["playlist_selected_row"])),
         list_h,
+        pl_colors,
     )
     renderer.mark_rect(44, (*scaled_xy(origin, (12, 20), scale), 243, list_h), scale)
     renderer.mark_rect(45, (*scaled_xy(origin, (12, selected_y), scale), 243, 9), scale)

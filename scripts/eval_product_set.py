@@ -45,7 +45,7 @@ from atlas_ai.v8_layout import (
     product_render_params,
     save_layout,
 )
-from atlas_ai.visible_extractor import extract_visible_assets
+from atlas_ai.visible_extractor import extract_visible_assets, playlist_pledit_text
 
 CRANAMP_CLI = REPO_ROOT / "cranamp_cli" / "cranamp-cli"
 COMPONENTS = ("main", "eq", "playlist")
@@ -239,8 +239,10 @@ def main() -> int:
 
         visible = extract_visible_assets(normalized, layout, default_skin=args.default_skin)
         compiled = compile_hidden_states(visible, default_skin=args.default_skin)
+        pledit_txt = playlist_pledit_text(normalized, layout, default_skin=args.default_skin)
         skin_dir = case / "skin"
-        zip_path = save_exported_tensors(compiled, skin_dir, default_skin=args.default_skin, package=True)
+        zip_path = save_exported_tensors(compiled, skin_dir, default_skin=args.default_skin,
+                                         package=True, text_overrides={"PLEDIT.TXT": pledit_txt})
         target_t = image_to_tensor(normalized)
 
         # Proxy renderer (optimization only).

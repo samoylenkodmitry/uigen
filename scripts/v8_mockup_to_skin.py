@@ -29,7 +29,7 @@ from atlas_ai.v8_layout import (
     normalize_mockup_image,
     save_layout,
 )
-from atlas_ai.visible_extractor import extract_visible_assets
+from atlas_ai.visible_extractor import extract_visible_assets, playlist_pledit_text
 
 
 def _side_by_side(left: Image.Image, right: Image.Image) -> Image.Image:
@@ -84,8 +84,10 @@ def main() -> int:
 
     visible = extract_visible_assets(normalized, layout, default_skin=args.default_skin)
     compiled = compile_hidden_states(visible, default_skin=args.default_skin)
+    pledit_txt = playlist_pledit_text(normalized, layout, default_skin=args.default_skin)
     skin_dir = out / "skin"
-    zip_path = save_exported_tensors(compiled, skin_dir, default_skin=args.default_skin, package=True)
+    zip_path = save_exported_tensors(compiled, skin_dir, default_skin=args.default_skin,
+                                     package=True, text_overrides={"PLEDIT.TXT": pledit_txt})
 
     rendered = tensor_to_image(render_visible(compiled, layout))
     rendered.save(out / "render_preview.png")

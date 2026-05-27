@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 import torch
 
@@ -153,4 +154,48 @@ def extract_visible_assets(
     return files
 
 
-__all__ = ["extract_visible_assets"]
+def _hex(c) -> str:
+    return "#%02x%02x%02x" % tuple(int(round(max(0.0, min(255.0, v)))) for v in c)
+
+
+def playlist_pledit_text(
+    normalized_image: Image.Image,
+    layout: dict,
+    *,
+    default_skin: str | Path = "assets/default_skin",
+) -> str:
+    """Derive a PLEDIT.TXT (playlist colors) from the mockup playlist body.
+
+    The engine reads Normal (entry text), Current (selected text), NormalBG
+    (list background) and SelectedBG (selected-row bg) from PLEDIT.TXT. Sample
+    them from the body region (window-local 12,20,243,203): the median is the
+    background; the pixels most distant from it in luminance are the text.
+    """
+    image = normalized_image.convert("RGB")
+    body = _crop_local(image, layout, "playlist", (12, 20, 243, 203), (243, 203))
+    arr = np.asarray(body, dtype=np.float32).reshape(-1, 3)
+    if arr.size == 0:
+        return (Path(default_skin) / "PLEDIT.TXT").read_text(encoding="latin-1")
+    coeff = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    lum = arr @ coeff
+    bg = np.median(arr, axis=0)
+    bg_lum = float(bg @ coeff)
+    dist = np.abs(lum - bg_lum)
+    thr = max(20.0, float(np.percentile(dist, 92)))
+    textpix = arr[dist >= thr]
+    text = textpix.mean(axis=0) if len(textpix) else np.array([255.0, 200.0, 108.0])
+    selbg = bg * 0.6 + text * 0.4                       # muted selected-row bg
+    current = np.clip(text * 0.45 + 255.0 * 0.55, 0, 255)  # brighter selected text
+    return (
+        "[Text]\n"
+        f"Normal={_hex(text)}\n"
+        f"Current={_hex(current)}\n"
+        f"NormalBG={_hex(bg)}\n"
+        f"SelectedBG={_hex(selbg)}\n"
+        f"MbFG={_hex(text)}\n"
+        f"MbBG={_hex(bg)}\n"
+        "Font=Arial\n"
+    )
+
+
+__all__ = ["extract_visible_assets", "playlist_pledit_text"]
