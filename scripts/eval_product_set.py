@@ -121,6 +121,29 @@ def _masked_metrics(r_t: torch.Tensor, m_t: torch.Tensor, mask: torch.Tensor) ->
     return rgb, edge
 
 
+# Dynamic (renderer/app-generated) regions of the main window, window-local in
+# the 275x116 main units. These are NOT skin pixels (timer digits, track/bitrate
+# text, the visualizer box, playback indicator), so they must not be scored as
+# skin chrome. The mono/stereo sprite (212,41,56,12), posbar/transport/vol-bal/
+# shufrep art are asset-sampled and remain scored.
+MAIN_DYNAMIC_RECTS = (
+    (24, 26, 90, 16),    # time digits + playback indicator
+    (27, 43, 72, 17),    # spectrum / visualizer box
+    (111, 27, 100, 29),  # track title + bitrate / kHz text
+)
+
+
+def _main_chrome_mask(h: int, w: int) -> torch.Tensor:
+    """1 over main SKIN CHROME, 0 over dynamic renderer/app content."""
+    mask = torch.ones(1, h, w)
+    sx, sy = w / 275.0, h / 116.0
+    for lx, ly, lw, lh in MAIN_DYNAMIC_RECTS:
+        x0, y0 = int(round(lx * sx)), int(round(ly * sy))
+        x1, y1 = int(round((lx + lw) * sx)), int(round((ly + lh) * sy))
+        mask[:, y0:y1, x0:x1] = 0.0
+    return mask
+
+
 def _playlist_chrome_mask(h: int, w: int) -> torch.Tensor:
     """1 over playlist CHROME, 0 over the procedural list body (dynamic text).
 
@@ -171,6 +194,8 @@ def _nan_comp() -> dict:
     out = {f"{n}_cranamp_{m}": float("nan") for n in COMPONENTS for m in ("rgb_mae", "sobel_mae")}
     out["playlist_cranamp_rgb_mae_unmasked"] = float("nan")
     out["playlist_cranamp_sobel_mae_unmasked"] = float("nan")
+    out["main_cranamp_rgb_mae_unmasked"] = float("nan")
+    out["main_cranamp_sobel_mae_unmasked"] = float("nan")
     out.update({f"main_{n}_rgb_mae": float("nan") for n in MAIN_SUBRECTS})
     return out
 
@@ -196,6 +221,11 @@ def _component_metrics(case: Path, normalized: Image.Image, cranamp_img: Image.I
             rgb, edge = _masked_metrics(r_t, m_t, mask)  # chrome only (headline)
             out["playlist_cranamp_rgb_mae_unmasked"] = rgb_full
             out["playlist_cranamp_sobel_mae_unmasked"] = edge_full
+        elif name == "main":
+            mask = _main_chrome_mask(r_t.shape[1], r_t.shape[2])
+            rgb, edge = _masked_metrics(r_t, m_t, mask)  # chrome only (headline)
+            out["main_cranamp_rgb_mae_unmasked"] = rgb_full
+            out["main_cranamp_sobel_mae_unmasked"] = edge_full
         else:
             rgb, edge = rgb_full, edge_full
         out[f"{name}_cranamp_rgb_mae"] = rgb
