@@ -115,6 +115,52 @@ def make_layout(
     }
 
 
+def product_render_params(layout: dict) -> dict:
+    """Neutral, deterministic Cranamp render params derived from a V8 layout.
+
+    The product gate must render the skin AS DESIGNED, so this produces params
+    with NO jitter: identity component transforms, window_scales=1, scale and
+    window origins matching the layout, and neutral playback/EQ state. Dynamic
+    app content (spectrum, playback indicator, playlist text) is zeroed/fixed so
+    it does not pollute skin-chrome comparison — what remains is the skin.
+
+    The schema matches cranamp tools/cranamp_cli.py render-params expectations.
+    """
+    rects = layout["rects"]
+    mx, my, mw, _mh = _rect_list(rects["main"])
+    ex, ey = _rect_list(rects["eq"])[:2]
+    px, py = _rect_list(rects["playlist"])[:2]
+    scale = float(mw) / 275.0  # window width = mw; heights = 116/261 * scale
+    return {
+        "schema": "cranamp_cli_renderer_v3",
+        "scale": round(scale, 6),
+        "windows": {
+            "main": [round(mx), round(my)],
+            "eq": [round(ex), round(ey)],
+            "playlist": [round(px), round(py)],
+        },
+        "window_scales": {"main": 1.0, "eq": 1.0, "playlist": 1.0},
+        "component_transforms": {},                     # identity fallback => no jitter
+        "group_modes": {"transport": False, "shufrep": False},
+        "playlist_entries": [f"{i + 1:02d}. Track {i + 1:02d}" for i in range(8)],
+        "state": {
+            "pressed_transport_button": -1,             # nothing pressed
+            "volume": 0.5,
+            "balance": 0.5,
+            "posbar": 0.0,
+            "shuffle": False,
+            "repeat": False,
+            "eq_on": True,
+            "eq_auto": False,
+            "eq_values": [0.5] * 11,                    # flat 0 dB (neutral)
+            "playlist_scroll": 0.0,
+            "playlist_selected_row": 0,
+            "playback": "stopped",                      # no play indicator
+            "histogram": [0.0] * 16,                    # no spectrum bars
+        },
+    }
+
+
 def draw_layout_overlay(image: Image.Image, layout: dict) -> Image.Image:
     overlay = image.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)

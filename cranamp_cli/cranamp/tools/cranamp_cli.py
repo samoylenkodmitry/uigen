@@ -966,6 +966,20 @@ def command_render_random(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_render_params(args: argparse.Namespace) -> int:
+    """Deterministic render from an explicit params JSON (no random jitter).
+
+    This is the product-gate render: the caller supplies neutral/product params
+    (identity component transforms, window_scales=1, fixed scale/state/playlist)
+    so the engine draws the skin AS DESIGNED, unlike render-random which jitters
+    geometry and state for stress-testing.
+    """
+    params = json.loads(Path(args.params_json).read_text(encoding="utf-8"))
+    renderer = render_with_params(Path(args.skin_dir), params, args.canvas_w, args.canvas_h)
+    write_outputs(renderer, args)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cranamp-cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -981,6 +995,14 @@ def build_parser() -> argparse.ArgumentParser:
     random_render.add_argument("--canvas-h", required=True, type=int)
     random_render.add_argument("--out-view", required=True)
     random_render.set_defaults(func=command_render_random)
+
+    params_render = subparsers.add_parser("render-params")
+    params_render.add_argument("--skin-dir", required=True)
+    params_render.add_argument("--params-json", required=True)
+    params_render.add_argument("--canvas-w", required=True, type=int)
+    params_render.add_argument("--canvas-h", required=True, type=int)
+    params_render.add_argument("--out-view", required=True)
+    params_render.set_defaults(func=command_render_params)
     return parser
 
 
