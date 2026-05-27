@@ -154,9 +154,26 @@ def _eq(files: dict[str, torch.Tensor], canvas: torch.Tensor, rect: tuple[int, i
 
 
 def _playlist(files: dict[str, torch.Tensor], canvas: torch.Tensor, rect: tuple[int, int, int, int]) -> None:
+    # Proxy: compose the playlist chrome from the same PLEDIT sub-sprites the
+    # real engine samples (titlebar left/fill/title/right, L/R borders, footer),
+    # mirroring render_playlist. The list body (dynamic text) is left as the dark
+    # canvas. Product gate is real Cranamp; this keeps the proxy approximately
+    # faithful now that PLEDIT.bmp holds sub-sprites, not a whole-window dump.
     x, y, w, h = rect
-    patch = files["PLEDIT.bmp"]
-    _paste(canvas, patch, x=x, y=y, w=w, h=h, transparent=False)
+    sx, sy = w / 275.0, h / 261.0
+    sc = (sx, sy)
+    bottom_y, right_x = 223, 255
+    _paste_src(canvas, files, "PLEDIT.bmp", (0, 21, 25, 20), (x, y), sc, transparent=False)
+    for tx in (25, 50, 75, 175, 200, 225):
+        _paste_src(canvas, files, "PLEDIT.bmp", (127, 21, 25, 20), (x + tx * sx, y), sc, transparent=False)
+    _paste_src(canvas, files, "PLEDIT.bmp", (26, 21, 100, 20), (x + 87 * sx, y), sc, transparent=False)
+    _paste_src(canvas, files, "PLEDIT.bmp", (153, 21, 25, 20), (x + 250 * sx, y), sc, transparent=False)
+    for ly in range(20, bottom_y, 29):
+        hh = min(29, bottom_y - ly)
+        _paste_src(canvas, files, "PLEDIT.bmp", (0, 42, 12, hh), (x, y + ly * sy), sc, transparent=False)
+        _paste_src(canvas, files, "PLEDIT.bmp", (31, 42, 20, hh), (x + right_x * sx, y + ly * sy), sc, transparent=False)
+    _paste_src(canvas, files, "PLEDIT.bmp", (0, 72, 125, 38), (x, y + bottom_y * sy), sc, transparent=False)
+    _paste_src(canvas, files, "PLEDIT.bmp", (126, 72, 150, 38), (x + 125 * sx, y + bottom_y * sy), sc, transparent=False)
 
 
 def render_visible(files: dict[str, torch.Tensor], layout: dict, *, background: float = 0.03) -> torch.Tensor:

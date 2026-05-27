@@ -128,10 +128,27 @@ def extract_visible_assets(
     files["EQMAIN.bmp"][:, 0:116, :] = eq_116
     files["EQMAIN.bmp"][:, 134:148, :] = eq_116[:, 0:14, :]
 
-    # Playlist baseline: map visible playlist into source sheet. The renderer
-    # uses pieces from PLEDIT, so this is approximate but product-visible.
-    pledit = image_to_tensor(_crop_local(image, layout, "playlist", (0, 0, 275, 261), (280, 186)))
-    files["PLEDIT.bmp"][:, :, :] = pledit
+    # Playlist: reconstruct the exact PLEDIT sub-sprites the real engine samples
+    # in render_playlist, instead of dumping the whole window (which made the
+    # engine tile the wrong pixels -> garbled "PLAYLAYLIST" title + right-edge
+    # text repeat). Each sprite is extracted from the window-local position the
+    # engine DRAWS it at and written to its PLEDIT source rect. The list body is
+    # procedural (black fill + text), not sampled from PLEDIT, so it is skipped.
+    #   (window-local draw rect) -> dst in PLEDIT.bmp
+    pledit_sprites = [
+        ((0, 0, 25, 20), (0, 21)),       # titlebar left corner
+        ((50, 0, 25, 20), (127, 21)),    # titlebar fill tile (repeated by engine)
+        ((87, 0, 100, 20), (26, 21)),    # titlebar centered title text
+        ((250, 0, 25, 20), (153, 21)),   # titlebar right corner
+        ((0, 20, 12, 29), (0, 42)),      # left border (tiled vertically)
+        ((255, 20, 20, 29), (31, 42)),   # right border (tiled vertically)
+        ((0, 223, 125, 38), (0, 72)),    # footer left
+        ((125, 223, 150, 38), (126, 72)),  # footer right
+        ((260, 30, 8, 18), (52, 53)),    # scrollbar thumb (best-effort position)
+    ]
+    for (lx, ly, lw, lh), dst in pledit_sprites:
+        _paste_crop(files, image, layout, file_name="PLEDIT.bmp", dst=dst,
+                    window="playlist", local=(lx, ly, lw, lh), out_size=(lw, lh))
 
     return files
 

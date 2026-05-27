@@ -109,12 +109,40 @@ def _crop(img: Image.Image, rect) -> Image.Image:
     return img.crop((x, y, x + w, y + h))
 
 
+def _masked_metrics(r_t: torch.Tensor, m_t: torch.Tensor, mask: torch.Tensor) -> tuple[float, float]:
+    """rgb/sobel MAE scored only where mask==1 ([1,H,W] in {0,1})."""
+    m3 = mask.expand_as(r_t)
+    denom = float(m3.sum())
+    if denom < 1:
+        return float("nan"), float("nan")
+    rgb = float(((r_t - m_t).abs() * m3).sum() / denom)
+    sob = (_sobel(r_t) - _sobel(m_t)).abs().squeeze(0)
+    edge = float((sob * m3).sum() / denom)
+    return rgb, edge
+
+
+def _playlist_chrome_mask(h: int, w: int) -> torch.Tensor:
+    """1 over playlist CHROME, 0 over the procedural list body (dynamic text).
+
+    The engine fills the list body (window-local 12,20,243,203 of the 275x261
+    playlist) with a hardcoded black bg + dynamic track text, not PLEDIT pixels,
+    so it must not be scored as skin chrome.
+    """
+    mask = torch.ones(1, h, w)
+    sx, sy = w / 275.0, h / 261.0
+    x0, y0 = int(round(12 * sx)), int(round(20 * sy))
+    x1, y1 = int(round(255 * sx)), int(round(223 * sy))
+    mask[:, y0:y1, x0:x1] = 0.0
+    return mask
+
+
 def _component_metrics(case: Path, normalized: Image.Image, cranamp_img: Image.Image,
                        layout: dict) -> dict:
     """Per-component (main/eq/playlist) cranamp rgb/sobel MAE + cropped SbS.
 
     The deterministic render places windows exactly at the layout rects, so the
-    mockup and render crop to the same regions.
+    mockup and render crop to the same regions. The playlist headline metric is
+    CHROME-only (dynamic list body masked); an unmasked value is also kept.
     """
     out = {}
     for name in COMPONENTS:
@@ -122,7 +150,15 @@ def _component_metrics(case: Path, normalized: Image.Image, cranamp_img: Image.I
         m_crop = _crop(normalized, rect)
         r_crop = _crop(cranamp_img, rect)
         _side_by_side(m_crop, r_crop).save(case / f"component_{name}.png")
-        rgb, edge = _metrics(image_to_tensor(r_crop), image_to_tensor(m_crop))
+        r_t, m_t = image_to_tensor(r_crop), image_to_tensor(m_crop)
+        rgb_full, edge_full = _metrics(r_t, m_t)
+        if name == "playlist":
+            mask = _playlist_chrome_mask(r_t.shape[1], r_t.shape[2])
+            rgb, edge = _masked_metrics(r_t, m_t, mask)  # chrome only (headline)
+            out["playlist_cranamp_rgb_mae_unmasked"] = rgb_full
+            out["playlist_cranamp_sobel_mae_unmasked"] = edge_full
+        else:
+            rgb, edge = rgb_full, edge_full
         out[f"{name}_cranamp_rgb_mae"] = rgb
         out[f"{name}_cranamp_sobel_mae"] = edge
     return out
@@ -189,6 +225,8 @@ def main() -> int:
             cranamp_rgb = cranamp_edge = float("nan")
             comp = {f"{n}_cranamp_{m}": float("nan")
                     for n in COMPONENTS for m in ("rgb_mae", "sobel_mae")}
+            comp["playlist_cranamp_rgb_mae_unmasked"] = float("nan")
+            comp["playlist_cranamp_sobel_mae_unmasked"] = float("nan")
 
         row = {
             "mockup": str(path),
