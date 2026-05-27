@@ -107,6 +107,46 @@ def _compile_playpaus_monoster(files: dict[str, torch.Tensor]) -> None:
     mono[:, 12:24, 0:56] = _dim(stereo)
 
 
+_EQ_SLIDER_XS = (21, 78, 96, 114, 132, 150, 168, 186, 204, 222, 240)
+_EQ_VIS_Y0, _EQ_FH, _EQ_FW = 38, 63, 14
+_EQ_THUMB = 11
+
+
+def _eq_groove_and_thumb(eq: torch.Tensor):
+    """Separate the skin's EQ slider into a thumb-free groove + a thumb sprite.
+
+    The 11 EQ band columns (visible window, local (slider_x, 38, 14, 63)) share
+    one groove but each has its thumb at a different height, so the per-pixel
+    MEDIAN across the 11 columns is the thumb-free groove (each band's thumb is
+    a per-row outlier). The thumb is the max-deviation-from-groove region of the
+    band whose thumb sits centrally enough to crop an 11x11 sprite.
+    Returns (groove[3,63,14], thumb[3,11,11]) or (None, None).
+    """
+    cols = []
+    for lx in _EQ_SLIDER_XS:
+        c = eq[:, _EQ_VIS_Y0 : _EQ_VIS_Y0 + _EQ_FH, lx : lx + _EQ_FW]
+        if c.shape[-2:] == (_EQ_FH, _EQ_FW):
+            cols.append(c)
+    if len(cols) < 3:
+        return None, None
+    stack = torch.stack(cols, dim=0)                       # [N,3,63,14]
+    groove = stack.median(dim=0).values.clone()            # [3,63,14] thumb-free
+    dev = (stack - groove.unsqueeze(0)).abs().sum(dim=(1, 3))  # [N,63] per-row deviation
+    cx = (_EQ_FW - _EQ_THUMB) // 2
+    best = None
+    for i in range(stack.shape[0]):
+        row = int(torch.argmax(dev[i]).item())
+        if 5 <= row <= _EQ_FH - 6:                         # 11-row crop fits
+            mag = float(dev[i, row])
+            if best is None or mag > best[2]:
+                best = (i, row, mag)
+    if best is None:
+        return groove, None
+    i, row, _ = best
+    thumb = stack[i][:, row - 5 : row + 6, cx : cx + _EQ_THUMB].clone()  # [3,11,11]
+    return groove, thumb
+
+
 def _compile_eq(files: dict[str, torch.Tensor]) -> None:
     """Source EQ sliders + ON/AUTO from the SKIN's visible window, not defaults.
 
@@ -119,22 +159,34 @@ def _compile_eq(files: dict[str, torch.Tensor]) -> None:
     into those sprite rects so the product render shows the skin's EQ widgets.
     """
     eq = files["EQMAIN.bmp"]
-    vis_slider = eq[:, 38:101, 78:92].clone()   # 14x63 skin slider (groove+thumb)
-    vis_on = eq[:, 18:30, 14:40].clone()        # 26x12 skin ON button
-    vis_auto = eq[:, 18:30, 40:72].clone()      # 32x12 skin AUTO button
-    if vis_slider.shape[-2:] == (63, 14):
-        # Fill all 28 slider-position frames + the rect the renderer samples.
-        # Uniform for now (positional thumb translation is a later refinement);
-        # the product gate is the static render, which reads (208,164).
-        for frame_idx in range(28):
-            dst_x = 13 + (frame_idx % 14) * 15
-            dst_y = 164 if frame_idx < 14 else 229
-            eq[:, dst_y : dst_y + 63, dst_x : dst_x + 14] = vis_slider
-        eq[:, 164:227, 208:222] = vis_slider
+    # Write the EXACT sprite rects the real Cranamp engine samples (see
+    # cranamp tools/cranamp_cli.py render_eq). The engine draws, per band, a
+    # background groove frame EQMAIN(13+(f%14)*15, 164|229, 14,63) indexed by EQ
+    # VALUE, then a SEPARATE thumb sprite EQMAIN(0,164,11,11) on top. So we must
+    # supply (a) a thumb-FREE groove and (b) a thumb sprite — not a baked
+    # composite. Source them from the skin's visible EQ window (rows 0:116),
+    # where the engine draws sliders at window-local (slider_x, 38, 14, 63).
+    groove, thumb = _eq_groove_and_thumb(eq)
+    if groove is not None:
+        for f in range(28):
+            fx = 13 + (f % 14) * 15
+            fy = 164 if f < 14 else 229
+            eq[:, fy : fy + 63, fx : fx + 14] = groove
+    if thumb is not None:
+        eq[:, 164:175, 0:11] = thumb        # EQMAIN(0,164,11,11) slider thumb
+    # ON/AUTO buttons (both on/off state rects) + PRESETS, from the visible
+    # window. ON drawn from (14,18), AUTO (40,18), PRESETS (217,18) (size 44x12).
+    vis_on = eq[:, 18:30, 14:40].clone()        # 26x12
+    vis_auto = eq[:, 18:30, 40:72].clone()      # 32x12
+    vis_presets = eq[:, 18:30, 217:261].clone()  # 44x12
     if vis_on.shape[-2:] == (12, 26):
-        eq[:, 119:131, 69:95] = vis_on
+        eq[:, 119:131, 69:95] = vis_on          # on state
+        eq[:, 119:131, 10:36] = vis_on          # off state (best-effort same art)
     if vis_auto.shape[-2:] == (12, 32):
-        eq[:, 119:131, 95:127] = vis_auto
+        eq[:, 119:131, 95:127] = vis_auto       # auto on
+        eq[:, 119:131, 36:68] = vis_auto        # auto off
+    if vis_presets.shape[-2:] == (12, 44):
+        eq[:, 164:176, 224:268] = vis_presets   # EQMAIN(224,164,44,12) PRESETS
 
 
 def compile_hidden_states(

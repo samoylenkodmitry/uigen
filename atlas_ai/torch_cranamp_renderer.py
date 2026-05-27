@@ -139,9 +139,18 @@ def _eq(files: dict[str, torch.Tensor], canvas: torch.Tensor, rect: tuple[int, i
     _paste_src(canvas, files, "EQMAIN.bmp", (0, 134, 275, 14), (x, y), scale)
     _paste_src(canvas, files, "EQMAIN.bmp", (69, 119, 26, 12), (x + 14 * sx, y + 18 * sy), scale)
     _paste_src(canvas, files, "EQMAIN.bmp", (95, 119, 32, 12), (x + 40 * sx, y + 18 * sy), scale)
+    # Proxy renderer (optimization only; real Cranamp is the product gate). Mirror
+    # the real engine's EQ slider model: a thumb-free groove frame + a separate
+    # thumb sprite EQMAIN(0,164,11,11) on top. The compiler writes the groove to
+    # the frame grid and the skin thumb to (0,164). The proxy draws all thumbs at
+    # a uniform mid height (it has no per-band EQ state).
     slider_xs = [21, 78, 96, 114, 132, 150, 168, 186, 204, 222, 240]
+    thumb_xs = [22, 79, 97, 115, 133, 151, 169, 187, 205, 223, 241]
+    thumb_y = 38 + round(0.5 * (63 - 11))
     for lx in slider_xs:
-        _paste_src(canvas, files, "EQMAIN.bmp", (208, 164, 14, 63), (x + lx * sx, y + 38 * sy), scale)
+        _paste_src(canvas, files, "EQMAIN.bmp", (13, 164, 14, 63), (x + lx * sx, y + 38 * sy), scale)
+    for tx in thumb_xs:
+        _paste_src(canvas, files, "EQMAIN.bmp", (0, 164, 11, 11), (x + tx * sx, y + thumb_y * sy), scale)
 
 
 def _playlist(files: dict[str, torch.Tensor], canvas: torch.Tensor, rect: tuple[int, int, int, int]) -> None:
