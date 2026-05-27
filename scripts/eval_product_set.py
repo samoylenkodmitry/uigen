@@ -136,6 +136,45 @@ def _playlist_chrome_mask(h: int, w: int) -> torch.Tensor:
     return mask
 
 
+# Main-window sub-component rects (window-local, in the 275x116 main units), from
+# render_main. Used to localize which main subcomponent is the biggest failure.
+MAIN_SUBRECTS = {
+    "titlebar": (0, 0, 275, 14),
+    "display": (24, 24, 237, 40),
+    "transport": (16, 88, 126, 18),
+    "posbar": (17, 72, 248, 10),
+    "volbal": (107, 57, 108, 13),
+    "monoster": (212, 41, 56, 12),
+    "playback": (26, 28, 9, 9),
+    "shufrep": (164, 89, 101, 16),
+}
+
+
+def _main_sub_metrics(case: Path, normalized: Image.Image, cranamp_img: Image.Image,
+                      layout: dict) -> dict:
+    """Per-subcomponent rgb MAE + cropped side-by-sides inside the main window."""
+    mx, my, mw, mh = (float(v) for v in layout["rects"]["main"])
+    sxr, syr = mw / 275.0, mh / 116.0
+    sub_dir = case / "main_sub"
+    sub_dir.mkdir(exist_ok=True)
+    out = {}
+    for name, (lx, ly, lw, lh) in MAIN_SUBRECTS.items():
+        rect = (mx + lx * sxr, my + ly * syr, lw * sxr, lh * syr)
+        m_c, r_c = _crop(normalized, rect), _crop(cranamp_img, rect)
+        _side_by_side(m_c, r_c).save(sub_dir / f"{name}.png")
+        rgb, _ = _metrics(image_to_tensor(r_c), image_to_tensor(m_c))
+        out[f"main_{name}_rgb_mae"] = rgb
+    return out
+
+
+def _nan_comp() -> dict:
+    out = {f"{n}_cranamp_{m}": float("nan") for n in COMPONENTS for m in ("rgb_mae", "sobel_mae")}
+    out["playlist_cranamp_rgb_mae_unmasked"] = float("nan")
+    out["playlist_cranamp_sobel_mae_unmasked"] = float("nan")
+    out.update({f"main_{n}_rgb_mae": float("nan") for n in MAIN_SUBRECTS})
+    return out
+
+
 def _component_metrics(case: Path, normalized: Image.Image, cranamp_img: Image.Image,
                        layout: dict) -> dict:
     """Per-component (main/eq/playlist) cranamp rgb/sobel MAE + cropped SbS.
@@ -221,12 +260,10 @@ def main() -> int:
             cranamp_rgb, cranamp_edge = _metrics(cranamp_t, target_t)
             _side_by_side(normalized, cranamp_img).save(case / "side_by_side_cranamp.png")
             comp = _component_metrics(case, normalized, cranamp_img, layout)
+            comp.update(_main_sub_metrics(case, normalized, cranamp_img, layout))
         else:
             cranamp_rgb = cranamp_edge = float("nan")
-            comp = {f"{n}_cranamp_{m}": float("nan")
-                    for n in COMPONENTS for m in ("rgb_mae", "sobel_mae")}
-            comp["playlist_cranamp_rgb_mae_unmasked"] = float("nan")
-            comp["playlist_cranamp_sobel_mae_unmasked"] = float("nan")
+            comp = _nan_comp()
 
         row = {
             "mockup": str(path),
