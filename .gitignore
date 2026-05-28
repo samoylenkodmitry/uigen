@@ -29,3 +29,7 @@ out_skin/
 
 # V8 product eval inputs (generated mockups / real-skin renders) — not committed
 eval_mockups/
+
+# V10 datasets (large, derived)
+data_v10/
+data_v10_*/
