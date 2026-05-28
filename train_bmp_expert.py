@@ -14,6 +14,7 @@ with running-mean loss / sec/step / ETA / metrics (flush=True).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import time as _time
@@ -88,6 +89,10 @@ def main() -> int:
     p.add_argument("--checkpoint-every", type=int, default=500)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--amp", action="store_true",
+                   help="Mixed-precision FP16 autocast on CUDA (recommended on T4).")
+    p.add_argument("--no-amp", action="store_true",
+                   help="Force FP32 on CUDA (overrides --amp).")
     args = p.parse_args()
 
     spec = SPEC_BY_NAME.get(args.bmp)
@@ -113,9 +118,19 @@ def main() -> int:
         "n_items": len(ds), "args": vars(args)}, indent=2, sort_keys=True))
     metrics_f = (out / "metrics.jsonl").open("w")
 
+    use_amp = device.type == "cuda" and args.amp and not args.no_amp
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    autocast_ctx = (lambda: torch.amp.autocast(device_type="cuda", dtype=torch.float16)) \
+        if use_amp else contextlib.nullcontext
+
     print(f"V10 train: bmp={args.bmp} ({spec.w}x{spec.h}) steps={args.steps} "
           f"batch={args.batch} lr={args.lr} n_items={len(ds)} device={device} "
-          f"progress_every={args.progress_every}", flush=True)
+          f"amp={use_amp} progress_every={args.progress_every}", flush=True)
+
+    # Save an initial checkpoint so subsequent eval/infer has artifacts even if
+    # the training loop crashes (OOM, etc.) before the first step succeeds.
+    save_state_dict(out / "last.safetensors", model.state_dict())
+    save_state_dict(out / "best.safetensors", model.state_dict())
 
     model.train()
     step = 0
@@ -134,11 +149,13 @@ def main() -> int:
             batch = next(it)
         x = batch["render"].to(device, non_blocking=True)
         y = batch["target"].to(device, non_blocking=True)
-        out_y = model(x)
-        losses = compute_losses(out_y, y)
+        with autocast_ctx():
+            out_y = model(x)
+            losses = compute_losses(out_y, y)
         optimizer.zero_grad(set_to_none=True)
-        losses["total"].backward()
-        optimizer.step()
+        scaler.scale(losses["total"]).backward()
+        scaler.step(optimizer)
+        scaler.update()
         step += 1
         recent.append(float(losses["total"].detach()))
         recent_mae.append(float(losses["mae"]))

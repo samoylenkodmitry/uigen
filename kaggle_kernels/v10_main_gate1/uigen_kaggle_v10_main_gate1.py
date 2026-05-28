@@ -42,9 +42,11 @@ DATA_ROOT = Path(
 SKIN_DIR = DATA_ROOT / "minimalistic_black_145917e6"
 SKIN_ID = "minimalistic_black"
 
-# Training config (HANDOFF_V10 starting defaults).
+# Training config (HANDOFF_V10 starting defaults + T4 memory tuning).
+# batch=8 OOM'd on T4 at full input 1728x960 (stem activation alone ~640MB at
+# base=48). FP16 autocast + batch=4 fits with comfortable headroom.
 STEPS = 20000
-BATCH = 8
+BATCH = 4
 LR = 3e-4
 BASE = 48
 ATTN_DIM = 256
@@ -53,6 +55,7 @@ HEADS = 4
 ATTN_LAYERS = 2
 CHECKPOINT_EVERY = 2000
 PROGRESS_EVERY = 100
+AMP = True
 
 DATA_OUT = WORK / "data_v10_gate1"
 RUN_OUT = WORK / "runs" / "v10" / "MAIN"
@@ -98,7 +101,7 @@ print(f"sanity: csv_rows={n_rows}  target_main={target_main.exists()}  "
       f"gaps={(DATA_OUT / 'renderer_gaps.json').exists()}", flush=True)
 
 # 05: train MAIN expert (only).
-summaries.append(run("05_train_MAIN", [
+train_cmd = [
     sys.executable, "train_bmp_expert.py",
     "--data", str(DATA_OUT), "--bmp", "MAIN.bmp", "--out", str(RUN_OUT),
     "--steps", str(STEPS), "--batch", str(BATCH), "--lr", str(LR),
@@ -106,7 +109,10 @@ summaries.append(run("05_train_MAIN", [
     "--heads", str(HEADS), "--attn-layers", str(ATTN_LAYERS),
     "--checkpoint-every", str(CHECKPOINT_EVERY), "--progress-every", str(PROGRESS_EVERY),
     "--num-workers", "2", "--device", "cuda",
-], cwd=REPO, capture=False))
+]
+if AMP:
+    train_cmd.append("--amp")
+summaries.append(run("05_train_MAIN", train_cmd, cwd=REPO, capture=False))
 
 # 06: eval over the Gate 1 dataset (uses best.safetensors).
 eval_dir = RUN_OUT / "eval"

@@ -87,7 +87,15 @@ def main() -> int:
     ds = BMPExpertDataset(args.data, args.bmp)
     loader = DataLoader(ds, batch_size=args.batch, shuffle=False, num_workers=0)
     from safetensors.torch import load_file
-    state = load_file(args.checkpoint)
+    ckpt = Path(args.checkpoint)
+    if not ckpt.exists():
+        last = ckpt.with_name("last.safetensors")
+        if last.exists():
+            print(f"WARNING: {ckpt} missing -> falling back to {last}", flush=True)
+            ckpt = last
+        else:
+            raise SystemExit(f"checkpoint not found: {args.checkpoint} (and no last.safetensors next to it)")
+    state = load_file(str(ckpt))
     model = _build_expert_from_state(state).to(device).eval()
     model.load_state_dict(state)
 
