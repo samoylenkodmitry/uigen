@@ -47,7 +47,11 @@ KAGGLE_INPUT = Path("/kaggle/input")
 CKPTS_SLUG = "uigen-v10-ckpts"
 
 BMP = "CBUTTONS.bmp"
-STEPS = 20000
+# Max budget cap; early-stop ends the run once the eval gate holds. MAIN's live
+# curve showed a plateau->drop at ~7k; CBUTTONS converged by ~1.7k. eval-every
+# 500 + patience 2 stops shortly after the gate is comfortably met, bounded by
+# STEPS. This avoids the ~2h flat-refinement tail of a fixed 20k run.
+STEPS = 15000
 BATCH = 4
 LR = 3e-4
 BASE = 48
@@ -58,6 +62,11 @@ ATTN_LAYERS = 2
 CHECKPOINT_EVERY = 2000
 PROGRESS_EVERY = 100
 AMP = True
+EVAL_EVERY = 500
+EVAL_MAX_ITEMS = 256
+EARLY_STOP_MAE = 0.008
+EARLY_STOP_HIT5 = 0.93
+EARLY_STOP_PATIENCE = 2
 
 DATA_OUT = SCRATCH / "data_v10_gate1"
 RUNS_ROOT = SCRATCH / "runs" / "v10"
@@ -137,6 +146,9 @@ train_cmd = [
     "--base", str(BASE), "--attn-dim", str(ATTN_DIM), "--dec-ch", str(DEC_CH),
     "--heads", str(HEADS), "--attn-layers", str(ATTN_LAYERS),
     "--checkpoint-every", str(CHECKPOINT_EVERY), "--progress-every", str(PROGRESS_EVERY),
+    "--eval-every", str(EVAL_EVERY), "--eval-max-items", str(EVAL_MAX_ITEMS),
+    "--early-stop", "--early-stop-mae", str(EARLY_STOP_MAE),
+    "--early-stop-hit5", str(EARLY_STOP_HIT5), "--early-stop-patience", str(EARLY_STOP_PATIENCE),
     "--num-workers", "2", "--device", "cuda",
 ]
 if AMP:
@@ -168,6 +180,7 @@ artifacts = {
     "last.safetensors": RUN_OUT / "last.safetensors",
     "config.json": RUN_OUT / "config.json",
     "metrics.jsonl": RUN_OUT / "metrics.jsonl",
+    "eval_progress.jsonl": RUN_OUT / "eval_progress.jsonl",
     "eval_metrics.json": eval_dir / "metrics.json",
     "eval_per_variant.csv": eval_dir / "per_variant.csv",
     "pred_vs_target_grid.png": eval_dir / "pred_vs_target_grid.png",

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -70,6 +70,26 @@ def save_state_dict(path: Path, state: dict) -> None:
     save_file({k: v.cpu().contiguous() for k, v in state.items()}, str(path))
 
 
+@torch.no_grad()
+def evaluate_subset(model, eval_loader, device, autocast_ctx) -> tuple[float, float]:
+    """Mean MAE and hit_5_255 over a fixed eval subset (no grad). Restores
+    train mode on exit."""
+    model.eval()
+    tot_mae = tot_hit = 0.0
+    n = 0
+    for batch in eval_loader:
+        x = batch["render"].to(device, non_blocking=True)
+        y = batch["target"].to(device, non_blocking=True)
+        with autocast_ctx():
+            p = model(x).float().clamp(0.0, 1.0)
+        b = x.shape[0]
+        tot_mae += float((p - y).abs().mean(dim=(1, 2, 3)).sum())
+        tot_hit += float(((p - y).abs() * 255.0 <= 5.0).all(dim=1).float().mean(dim=(1, 2)).sum())
+        n += b
+    model.train()
+    return (tot_mae / max(1, n), tot_hit / max(1, n))
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data", required=True, help="V10 dataset root (e.g., data_v10/).")
@@ -93,6 +113,22 @@ def main() -> int:
                    help="Mixed-precision FP16 autocast on CUDA (recommended on T4).")
     p.add_argument("--no-amp", action="store_true",
                    help="Force FP32 on CUDA (overrides --amp).")
+    # Periodic eval + early stop. One-skin overfit: eval-subset MAE/hit5 is the
+    # true gate signal (less noisy than the running-mean train loss). Stops the
+    # long flat refinement tail once the gate is comfortably met.
+    p.add_argument("--eval-every", type=int, default=0,
+                   help="Run a no-grad eval pass every N steps (0 disables). "
+                        "Enables early stop and writes eval_progress.jsonl.")
+    p.add_argument("--eval-max-items", type=int, default=256,
+                   help="Cap eval-subset size (seeded shuffle across families) for speed.")
+    p.add_argument("--early-stop", action="store_true",
+                   help="Stop once the eval gate holds for --early-stop-patience evals.")
+    p.add_argument("--early-stop-mae", type=float, default=0.008,
+                   help="Eval MAE threshold for early stop (stricter than the 0.01 pass gate).")
+    p.add_argument("--early-stop-hit5", type=float, default=0.93,
+                   help="Eval hit_5_255 threshold for early stop (above the 0.90 pass gate).")
+    p.add_argument("--early-stop-patience", type=int, default=2,
+                   help="Consecutive passing evals required before stopping.")
     args = p.parse_args()
 
     spec = SPEC_BY_NAME.get(args.bmp)
@@ -111,12 +147,24 @@ def main() -> int:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                    weight_decay=args.weight_decay)
 
+    # Periodic-eval subset: seeded shuffle so it spans all state families (the
+    # dataset is ordered by family, so first-N would be unrepresentative).
+    eval_loader = None
+    if args.eval_every > 0:
+        g = torch.Generator().manual_seed(args.seed + 1)
+        perm = torch.randperm(len(ds), generator=g).tolist()
+        eval_idx = perm[: min(args.eval_max_items, len(ds))]
+        eval_loader = DataLoader(Subset(ds, eval_idx), batch_size=args.batch,
+                                 shuffle=False, num_workers=args.num_workers,
+                                 pin_memory=(device.type == "cuda"))
+
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps({
         "bmp": args.bmp, "target_h": spec.h, "target_w": spec.w,
         "n_items": len(ds), "args": vars(args)}, indent=2, sort_keys=True))
     metrics_f = (out / "metrics.jsonl").open("w")
+    eval_f = (out / "eval_progress.jsonl").open("w") if args.eval_every > 0 else None
 
     use_amp = device.type == "cuda" and args.amp and not args.no_amp
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -132,9 +180,18 @@ def main() -> int:
     save_state_dict(out / "last.safetensors", model.state_dict())
     save_state_dict(out / "best.safetensors", model.state_dict())
 
+    if args.eval_every > 0:
+        print(f"periodic eval: every {args.eval_every} steps over "
+              f"{len(eval_loader.dataset)} items; early_stop={args.early_stop} "
+              f"(mae<{args.early_stop_mae} hit5>{args.early_stop_hit5} "
+              f"patience={args.early_stop_patience})", flush=True)
+
     model.train()
     step = 0
     best = float("inf")
+    best_eval_mae = float("inf")
+    pass_streak = 0
+    stopped_early = False
     recent: list[float] = []
     recent_mae: list[float] = []
     recent_hit: list[float] = []
@@ -165,9 +222,12 @@ def main() -> int:
         rec = {k: float(v.detach() if torch.is_tensor(v) else v) for k, v in losses.items()}
         rec["step"] = step
         metrics_f.write(json.dumps(rec) + "\n")
+        # best.safetensors tracks best TRAIN loss only when periodic eval is off;
+        # with eval on, the eval block owns best.safetensors (best eval MAE).
         if rec["total"] < best:
             best = rec["total"]
-            save_state_dict(out / "best.safetensors", model.state_dict())
+            if eval_loader is None:
+                save_state_dict(out / "best.safetensors", model.state_dict())
         if (step % args.checkpoint_every == 0) or step == args.steps:
             save_state_dict(out / "last.safetensors", model.state_dict())
         if args.progress_every > 0 and step % args.progress_every == 0:
@@ -181,9 +241,33 @@ def main() -> int:
                   f"sec/step={sps:.3f}  elapsed={(now - start) / 60.0:5.1f}min  ETA={eta:5.1f}min",
                   flush=True)
             last_t = now
+        # Periodic eval + early stop (true gate signal on a fixed subset).
+        if eval_loader is not None and (step % args.eval_every == 0 or step == args.steps):
+            e_mae, e_hit = evaluate_subset(model, eval_loader, device, autocast_ctx)
+            gate = (e_mae < args.early_stop_mae and e_hit > args.early_stop_hit5)
+            pass_streak = pass_streak + 1 if gate else 0
+            eval_f.write(json.dumps({"step": step, "eval_mae": e_mae, "eval_hit_5_255": e_hit,
+                                     "gate": gate, "pass_streak": pass_streak}) + "\n")
+            eval_f.flush()
+            if e_mae < best_eval_mae:
+                best_eval_mae = e_mae
+                save_state_dict(out / "best.safetensors", model.state_dict())
+            print(f"[eval @ step {step:>6d}]  eval_mae={e_mae:.5f}  eval_hit5={e_hit:.4f}  "
+                  f"gate={'PASS' if gate else 'fail'}  streak={pass_streak}/{args.early_stop_patience}",
+                  flush=True)
+            if args.early_stop and pass_streak >= args.early_stop_patience:
+                save_state_dict(out / "last.safetensors", model.state_dict())
+                stopped_early = True
+                print(f"EARLY STOP at step {step}: eval gate held {pass_streak} consecutive "
+                      f"evals (mae={e_mae:.5f}<{args.early_stop_mae}, "
+                      f"hit5={e_hit:.4f}>{args.early_stop_hit5})", flush=True)
+                break
     save_state_dict(out / "last.safetensors", model.state_dict())
     metrics_f.close()
-    print(f"trained {args.bmp} for {step} step(s); best total {best:.4f}", flush=True)
+    if eval_f is not None:
+        eval_f.close()
+    print(f"trained {args.bmp} for {step} step(s); best total {best:.4f}; "
+          f"best_eval_mae {best_eval_mae:.5f}; early_stopped={stopped_early}", flush=True)
     return 0
 
 

@@ -191,7 +191,9 @@ def fetch_progress_lines(kernel_url: str, settle_seconds: float = 15.0) -> list[
             ".map(e => e.innerText || '')"
             ".join('\\n')"
             ".split('\\n')"
-            ".filter(t => /(\\[step\\s+\\d+\\/\\d+|training start:|trained V7Completer|\\bby_(mode|file|skin):)/.test(t))"
+            ".filter(t => /(\\[step\\s+\\d+\\/\\d+|\\[eval @ step|training start:|V10 train:|"
+            "EARLY STOP|trained (V7Completer|MAIN|CBUTTONS|EQMAIN|PLEDIT|TITLEBAR|VOLUME|"
+            "BALANCE|POSBAR|SHUFREP|MONOSTER|PLAYPAUS)|\\bby_(mode|file|skin):)/.test(t))"
             ".join('\\n')"
         )
         res = _send(ws, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
@@ -202,17 +204,22 @@ def fetch_progress_lines(kernel_url: str, settle_seconds: float = 15.0) -> list[
 
 
 _STEP_RE = re.compile(r"\[step\s+(\d+)/(\d+)")
+_EVAL_RE = re.compile(r"\[eval @ step\s+(\d+)")
 _BREAKDOWN_RE = re.compile(r"^by_(mode|file|skin):")
+_START_RE = re.compile(r"^(training start:|V10 train:)")
+_END_RE = re.compile(r"^(EARLY STOP|trained (V7Completer|MAIN|CBUTTONS|EQMAIN|PLEDIT|"
+                     r"TITLEBAR|VOLUME|BALANCE|POSBAR|SHUFREP|MONOSTER|PLAYPAUS))")
 
 
 def _dedupe(lines: list[str]) -> list[str]:
     """Kaggle's UI splits the log across overlapping containers, producing
-    triplicated step lines. We dedupe by step number and group each step's
-    breakdown sub-lines (by_mode / by_file / by_skin) under their owning
-    step. Banner lines (training start / trained V7Completer) bracket the
-    output."""
+    triplicated lines. Dedupe step lines by step number (grouping their
+    by_mode/by_file/by_skin breakdowns), dedupe periodic [eval @ step N] lines
+    by step, and keep start/end banners. Step + eval lines are interleaved by
+    step so the V10 gate progression (mae/hit5) reads in order."""
     step_lines: dict[int, str] = {}
     step_breakdowns: dict[int, list[str]] = {}
+    eval_lines: dict[int, str] = {}
     banners_start: list[str] = []
     banners_end: list[str] = []
     current_step: int | None = None
@@ -224,8 +231,11 @@ def _dedupe(lines: list[str]) -> list[str]:
         if m:
             step = int(m.group(1))
             current_step = step
-            if step not in step_lines:
-                step_lines[step] = line
+            step_lines.setdefault(step, line)
+            continue
+        m = _EVAL_RE.search(line)
+        if m:
+            eval_lines.setdefault(int(m.group(1)), line)
             continue
         if _BREAKDOWN_RE.match(line):
             if current_step is None:
@@ -234,20 +244,23 @@ def _dedupe(lines: list[str]) -> list[str]:
             if line not in slot:
                 slot.append(line)
             continue
-        if line.startswith("training start:"):
+        if _START_RE.match(line):
             if line not in banners_start:
                 banners_start.append(line)
             continue
-        if line.startswith("trained V7Completer"):
+        if _END_RE.match(line):
             if line not in banners_end:
                 banners_end.append(line)
             continue
     out: list[str] = []
     out.extend(banners_start)
-    for step in sorted(step_lines):
-        out.append(step_lines[step])
-        for b in step_breakdowns.get(step, []):
-            out.append("  " + b)
+    for step in sorted(set(step_lines) | set(eval_lines)):
+        if step in step_lines:
+            out.append(step_lines[step])
+            for b in step_breakdowns.get(step, []):
+                out.append("  " + b)
+        if step in eval_lines:
+            out.append("  " + eval_lines[step])
     out.extend(banners_end)
     return out
 
