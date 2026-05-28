@@ -1,6 +1,134 @@
 # V8 Product Pipeline Handoff
 
-Date: 2026-05-26
+## Superseded By V10
+
+This document is retained as history only.
+
+As of 2026-05-28, V8 crop-based visible extraction is **not** the product
+architecture. The screenshot comparison showed that V8 is a blind crop-and-paste
+baseline: it can produce loadable skins, but it does not learn to semantically
+fit buttons, sliders, playlist chrome, and dynamic content into the correct
+Winamp assets.
+
+Treat V8 as:
+
+```text
+loadability smoke test
+renderer/eval infrastructure
+deterministic hidden-state compiler prototype
+```
+
+Do not present V8 crop outputs as evidence that the mockup-to-skin product works.
+The active direction is now:
+
+```text
+HANDOFF_V10_BMP_EXPERTS.md
+```
+
+The next primary work is V10 BMP experts:
+
+```text
+full distorted/generated render -> one expert per output BMP -> final BMP pixels
+```
+
+Do not continue V8 crop-baseline polishing as product work.
+
+Date: 2026-05-27
+
+## Historical V8 Gate
+
+The product gate is the **real Cranamp render of the generated `.wsz`**.
+
+`atlas_ai/torch_cranamp_renderer.py` / `render_visible` remains useful as a
+differentiable optimization proxy, but it is not allowed to decide product
+progress by itself. It can flatter the result because it re-pastes extracted
+mockup crops at the expected positions. Every product eval must save and score
+both:
+
+```text
+render_lite.png          # Cranamp-lite proxy
+render_cranamp.png       # real Cranamp CLI render of the generated .wsz
+side_by_side_lite.png
+side_by_side_cranamp.png
+```
+
+Summary metrics must distinguish:
+
+```text
+lite_rgb_mae
+lite_sobel_mae
+cranamp_rgb_mae
+cranamp_sobel_mae
+load_success
+```
+
+Only the `cranamp_*` metrics plus visual inspection are the product gate.
+
+Local history currently has:
+
+```text
+9693be7 V8 eval: score product set with real Cranamp renderer (product gate)
+4316b1e V8 EQ: write real Cranamp EQ sprite geometry
+```
+
+These are valid to push if honest and green. The old proxy-only EQ commit must
+not be pushed as product success:
+
+```text
+d7f4e8e V8 product baseline + EQ widget extraction fix
+```
+
+## Historical V8 Next Cycle: No Longer Primary
+
+This was the next cycle before the later resets. Do not treat it as the current
+primary plan unless V10 product eval later proves this specific sprite-geometry
+work is the blocker again.
+
+The comparison image shows the next blocker is **sprite-geometry
+reconstruction**, not render-random state confound.
+
+Observed real-Cranamp failures:
+
+```text
+1. Playlist title is garbled ("PLAYLAYLAYLIST") and right-edge text repeats.
+   That means PLEDIT.bmp is being tiled/sampled by real Cranamp from the wrong
+   source pixels. Whole-playlist crop into PLEDIT.bmp cannot work.
+
+2. Main window has sprite alignment/composition defects; this is not merely a
+   random-state mismatch.
+
+3. EQ fix is real progress, but scoped: it proves the method of reading real
+   Cranamp geometry and writing the actual sampled rects.
+```
+
+Next work:
+
+```text
+1. Add per-component product metrics from real Cranamp renders:
+   main_cranamp_rgb_mae / main_cranamp_sobel_mae
+   eq_cranamp_rgb_mae / eq_cranamp_sobel_mae
+   playlist_cranamp_rgb_mae / playlist_cranamp_sobel_mae
+
+2. Save cropped side-by-sides per component.
+
+3. Read/pin real Cranamp render_playlist geometry.
+
+4. Reconstruct PLEDIT.bmp sub-sprites:
+   titlebar left/middle/repeat/right
+   actual playlist title/text area
+   side borders
+   footer pieces
+   scrollbar thumb
+   selected-row/list background only if sampled from assets
+```
+
+Rule:
+
+```text
+Whole-window crop works only for areas Cranamp draws as one large bitmap.
+Any tiled/sprite-composited area must be compiled into the exact sampled sprite
+rects the real engine reads.
+```
 
 ## Reset
 
@@ -45,7 +173,8 @@ mockup image
 -> visible/default exported BMP tensors
 -> deterministic plausible hidden states
 -> skin.wsz
--> Cranamp-lite render
+-> Cranamp-lite proxy render
+-> real Cranamp product render
 -> optional render-match refinement
 -> product eval side-by-side
 ```
@@ -58,11 +187,13 @@ Does the rendered output look like the mockup?
 Are visible panels/buttons/sliders sharp and in the right place?
 ```
 
-Secondary automated metrics:
+Automated metrics:
 
 ```text
-render_rgb_mae
-render_sobel_mae
+cranamp_rgb_mae
+cranamp_sobel_mae
+component cranamp MAE/Sobel
+lite_rgb_mae / lite_sobel_mae for proxy diagnostics only
 load_success
 edge/sharpness diagnostics
 ```
@@ -127,7 +258,7 @@ runs/v8/goose/side_by_side.png
 runs/v8/goose/skin/skin.wsz
 ```
 
-Render with existing Cranamp CLI as an external load/render check:
+Render with existing Cranamp CLI as the product check:
 
 ```bash
 cranamp_cli/cranamp-cli render-random \
@@ -235,7 +366,8 @@ Deterministic plausible hidden states:
 
 ```text
 Differentiable Cranamp-lite visible renderer for main/EQ/playlist product loss.
-It is not full Cranamp; it is enough to compute render(pred) vs mockup.
+It is not full Cranamp. Use it for optimization/proxy diagnostics only; product
+progress is judged on real Cranamp CLI renders.
 ```
 
 `models/visible_skin_net.py`
@@ -299,7 +431,7 @@ The generated `.wsz` loaded through the existing Cranamp CLI renderer.
 
 ## Claude Run Ownership
 
-Claude owns runs/evals from here. Recommended sequence:
+Historical V8 run/eval sequence:
 
 1. Create/populate `eval_mockups/` with 20-50 fixed generated mockups.
 2. For each mockup, add manual rect JSON if default stacking is wrong.
@@ -307,6 +439,9 @@ Claude owns runs/evals from here. Recommended sequence:
 4. Inspect `side_by_side.png` per case and fill human ratings in
    `summary.csv`.
 5. Pick the biggest visible product failure and fix that first.
+
+The current biggest failure is playlist/PLEDIT sprite reconstruction under real
+Cranamp, measured with component metrics, not render-random state confound.
 
 Do not optimize a subproblem unless it improves one of:
 
