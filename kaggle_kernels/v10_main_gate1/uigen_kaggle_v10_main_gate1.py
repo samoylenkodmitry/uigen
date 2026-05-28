@@ -17,6 +17,12 @@ Steps:
 All required Gate 1 artifacts (checkpoint, train/eval log, pred-vs-target grid,
 metrics, packaged skin, Cranamp render side-by-side) land under
 /kaggle/working/v10_main_outputs.
+
+Output-dir discipline: the cloned repo, the generated dataset, and the run dir
+all live under SCRATCH (/tmp), NOT /kaggle/working. Only the small final
+artifact bundle is copied to OUT. This keeps /kaggle/working a single page so
+`kaggle kernels output` (which does not follow pagination tokens) downloads
+every artifact in one pass instead of stopping inside a 700-file dataset dir.
 """
 
 from __future__ import annotations
@@ -30,8 +36,12 @@ from pathlib import Path
 REPO_URL = "https://github.com/samoylenkodmitry/uigen.git"
 REPO_BRANCH = "main"
 
+# Scratch (ephemeral, NOT persisted/listed): repo + dataset + run outputs.
+SCRATCH = Path("/tmp/v10_work")
+SCRATCH.mkdir(parents=True, exist_ok=True)
+REPO = SCRATCH / "uigen"
+# Persisted output: ONLY the small artifact bundle.
 WORK = Path("/kaggle/working")
-REPO = WORK / "uigen"
 OUT = WORK / "v10_main_outputs"
 OUT.mkdir(parents=True, exist_ok=True)
 
@@ -57,8 +67,8 @@ CHECKPOINT_EVERY = 2000
 PROGRESS_EVERY = 100
 AMP = True
 
-DATA_OUT = WORK / "data_v10_gate1"
-RUN_OUT = WORK / "runs" / "v10" / "MAIN"
+DATA_OUT = SCRATCH / "data_v10_gate1"
+RUN_OUT = SCRATCH / "runs" / "v10" / "MAIN"
 
 
 def run(label, cmd, cwd=None, capture=True):
@@ -128,7 +138,7 @@ summaries.append(run("06_eval_MAIN", [
 # Use the first dataset render as the input image so the demo is closed-loop:
 # render-from-source -> predicted MAIN.bmp -> defaults for other 10 -> .wsz.
 demo_image = DATA_OUT / "renders" / f"{SKIN_ID}_000000.png"
-demo_out = WORK / "v10_main_demo"
+demo_out = SCRATCH / "v10_main_demo"
 summaries.append(run("07_infer_demo", [
     sys.executable, "infer_v10.py",
     "--image", str(demo_image),
