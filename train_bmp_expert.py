@@ -133,6 +133,10 @@ def main() -> int:
     p.add_argument("--d-lr", type=float, default=4e-4, help="Discriminator LR (TTUR; > generator LR).")
     p.add_argument("--d-base", type=int, default=64, help="PatchGAN base channels.")
     p.add_argument("--d-layers", type=int, default=3, help="PatchGAN downsample layers.")
+    p.add_argument("--init-from", default=None,
+                   help="Initialize the generator from a checkpoint (same arch). For "
+                        "adversarial: pretrain with L1 first, then fine-tune from it — "
+                        "GAN from random weights diverges.")
     # Periodic eval + early stop. One-skin overfit: eval-subset MAE/hit5 is the
     # true gate signal (less noisy than the running-mean train loss). Stops the
     # long flat refinement tail once the gate is comfortably met.
@@ -165,6 +169,14 @@ def main() -> int:
                          attn_dim=args.attn_dim, dec_ch=args.dec_ch,
                          heads=args.heads, attn_layers=args.attn_layers,
                          query_div=args.query_div, decoder_kind=args.decoder).to(device)
+    if args.init_from:
+        from safetensors.torch import load_file as _load
+        init_state = _load(args.init_from)
+        missing, unexpected = model.load_state_dict(init_state, strict=False)
+        allowed = {"query_div_buf", "decoder_kind_buf"}
+        if unexpected or set(missing) - allowed:
+            raise SystemExit(f"--init-from mismatch: missing={missing} unexpected={unexpected}")
+        print(f"initialized generator from {args.init_from}", flush=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                    weight_decay=args.weight_decay)
     disc = d_opt = None
