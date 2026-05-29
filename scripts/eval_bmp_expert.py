@@ -126,7 +126,8 @@ def main() -> int:
             sob = (_sobel(p) - _sobel(y)).abs().mean(dim=(1, 2, 3)).cpu()
             for b in range(x.shape[0]):
                 v_id = batch["variant_id"][b]
-                row = {"variant_id": v_id, "mae": float(mae[b]),
+                s_id = batch["skin_id"][b] if "skin_id" in batch else "?"
+                row = {"variant_id": v_id, "skin_id": s_id, "mae": float(mae[b]),
                        "hit_5_255": float(hit[b]), "sobel_mae": float(sob[b])}
                 per_variant.append(row)
                 tot_mae += row["mae"]; tot_hit += row["hit_5_255"]; tot_sob += row["sobel_mae"]
@@ -144,9 +145,25 @@ def main() -> int:
     spec_h, spec_w = model.target_h, model.target_w
     agg["gate1_pass"] = bool(agg["mae_mean"] < 0.01 and agg["hit_5_255_mean"] > 0.90)
     agg["target_hw"] = [spec_h, spec_w]
+    # Per-skin breakdown (Gate 2): a mean can pass while one skin fails badly, so
+    # report each skin and gate2_pass = EVERY skin clears the per-skin bar.
+    by_skin: dict[str, dict] = {}
+    for r in per_variant:
+        s = by_skin.setdefault(r["skin_id"], {"n": 0, "mae": 0.0, "hit_5_255": 0.0})
+        s["n"] += 1; s["mae"] += r["mae"]; s["hit_5_255"] += r["hit_5_255"]
+    per_skin = {s: {"n": v["n"], "mae_mean": v["mae"] / max(1, v["n"]),
+                    "hit_5_255_mean": v["hit_5_255"] / max(1, v["n"])}
+                for s, v in sorted(by_skin.items())}
+    for s, v in per_skin.items():
+        v["pass"] = bool(v["mae_mean"] < 0.01 and v["hit_5_255_mean"] > 0.90)
+    agg["per_skin"] = per_skin
+    agg["n_skins"] = len(per_skin)
+    agg["gate2_pass"] = bool(len(per_skin) > 1 and all(v["pass"] for v in per_skin.values()))
+    agg["worst_skin"] = (max(per_skin.items(), key=lambda kv: kv[1]["mae_mean"])[0]
+                         if per_skin else None)
     (out / "metrics.json").write_text(json.dumps(agg, indent=2))
     with (out / "per_variant.csv").open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["variant_id", "mae", "hit_5_255", "sobel_mae"])
+        w = csv.DictWriter(f, fieldnames=["variant_id", "skin_id", "mae", "hit_5_255", "sobel_mae"])
         w.writeheader(); w.writerows(per_variant)
     if grid_pairs:
         _grid(grid_pairs).save(out / "pred_vs_target_grid.png")
