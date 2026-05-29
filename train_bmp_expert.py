@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from atlas_ai.dataset_v10_bmp import BMPExpertDataset
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
-from models.bmp_expert_net import BMPExpertNet
+from models.bmp_expert_net import BMPExpertNet, BMPPatchDiscriminator
 
 
 SPEC_BY_NAME = {s.file_name: s for s in TRAINABLE_EXPORT_SPECS}
@@ -123,6 +123,16 @@ def main() -> int:
                    help="Mixed-precision FP16 autocast on CUDA (recommended on T4).")
     p.add_argument("--no-amp", action="store_true",
                    help="Force FP32 on CUDA (overrides --amp).")
+    # Adversarial (pix2pix-style) generative training: a PatchGAN discriminator
+    # forces crisp high-frequency detail the L1 mean cannot synthesize (EQMAIN
+    # slider grooves). Generator/checkpoint unchanged; D is training-only.
+    p.add_argument("--adversarial", action="store_true",
+                   help="Add a PatchGAN discriminator + adversarial/feature-match loss.")
+    p.add_argument("--adv-weight", type=float, default=0.1, help="Weight on the generator adversarial term.")
+    p.add_argument("--fm-weight", type=float, default=1.0, help="Weight on discriminator feature-matching loss.")
+    p.add_argument("--d-lr", type=float, default=4e-4, help="Discriminator LR (TTUR; > generator LR).")
+    p.add_argument("--d-base", type=int, default=64, help="PatchGAN base channels.")
+    p.add_argument("--d-layers", type=int, default=3, help="PatchGAN downsample layers.")
     # Periodic eval + early stop. One-skin overfit: eval-subset MAE/hit5 is the
     # true gate signal (less noisy than the running-mean train loss). Stops the
     # long flat refinement tail once the gate is comfortably met.
@@ -157,6 +167,12 @@ def main() -> int:
                          query_div=args.query_div, decoder_kind=args.decoder).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                    weight_decay=args.weight_decay)
+    disc = d_opt = None
+    if args.adversarial:
+        disc = BMPPatchDiscriminator(base=args.d_base, n_layers=args.d_layers,
+                                     min_dim=min(spec.h, spec.w)).to(device)
+        d_opt = torch.optim.AdamW(disc.parameters(), lr=args.d_lr, betas=(0.5, 0.9),
+                                  weight_decay=args.weight_decay)
 
     # Periodic-eval subset: seeded shuffle so it spans all state families (the
     # dataset is ordered by family, so first-N would be unrepresentative).
@@ -177,7 +193,8 @@ def main() -> int:
     metrics_f = (out / "metrics.jsonl").open("w")
     eval_f = (out / "eval_progress.jsonl").open("w") if args.eval_every > 0 else None
 
-    use_amp = device.type == "cuda" and args.amp and not args.no_amp
+    # Adversarial training runs in FP32 (GAN + fp16 GradScaler is fragile).
+    use_amp = device.type == "cuda" and args.amp and not args.no_amp and not args.adversarial
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     autocast_ctx = (lambda: torch.amp.autocast(device_type="cuda", dtype=torch.float16)) \
         if use_amp else contextlib.nullcontext
@@ -217,13 +234,37 @@ def main() -> int:
             batch = next(it)
         x = batch["render"].to(device, non_blocking=True)
         y = batch["target"].to(device, non_blocking=True)
-        with autocast_ctx():
+        if disc is not None:
+            # --- Discriminator step (hinge): real target vs detached fake ---
             out_y = model(x)
+            d_real, _ = disc(y)
+            d_fake, _ = disc(out_y.detach())
+            d_loss = F.relu(1.0 - d_real).mean() + F.relu(1.0 + d_fake).mean()
+            d_opt.zero_grad(set_to_none=True)
+            d_loss.backward()
+            d_opt.step()
+            # --- Generator step: pixel losses + adversarial + feature matching ---
             losses = compute_losses(out_y, y)
-        optimizer.zero_grad(set_to_none=True)
-        scaler.scale(losses["total"]).backward()
-        scaler.step(optimizer)
-        scaler.update()
+            g_fake, feats_fake = disc(out_y)
+            _, feats_real = disc(y)
+            g_adv = -g_fake.mean()
+            fm = sum(F.l1_loss(ff, fr.detach()) for ff, fr in zip(feats_fake, feats_real)) \
+                / max(1, len(feats_fake))
+            total = losses["total"] + args.adv_weight * g_adv + args.fm_weight * fm
+            losses["total"] = total
+            losses["g_adv"] = g_adv.detach()
+            losses["d_loss"] = d_loss.detach()
+            optimizer.zero_grad(set_to_none=True)
+            total.backward()
+            optimizer.step()
+        else:
+            with autocast_ctx():
+                out_y = model(x)
+                losses = compute_losses(out_y, y)
+            optimizer.zero_grad(set_to_none=True)
+            scaler.scale(losses["total"]).backward()
+            scaler.step(optimizer)
+            scaler.update()
         step += 1
         recent.append(float(losses["total"].detach()))
         recent_mae.append(float(losses["mae"]))
@@ -251,6 +292,9 @@ def main() -> int:
                   f"hit5={sum(recent_hit) / len(recent_hit):.3f}  "
                   f"sec/step={sps:.3f}  elapsed={(now - start) / 60.0:5.1f}min  ETA={eta:5.1f}min",
                   flush=True)
+            if disc is not None and "g_adv" in losses:
+                print(f"           adv: g_adv={float(losses['g_adv']):.4f} "
+                      f"d_loss={float(losses['d_loss']):.4f}", flush=True)
             last_t = now
         # Periodic eval + early stop (true gate signal on a fixed subset).
         if eval_loader is not None and (step % args.eval_every == 0 or step == args.steps):

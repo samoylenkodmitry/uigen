@@ -8,7 +8,20 @@ import torch
 
 from atlas_ai.dataset_v10_bmp import CANVAS_H, CANVAS_W
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
-from models.bmp_expert_net import BMPExpertNet
+from models.bmp_expert_net import BMPExpertNet, BMPPatchDiscriminator
+
+
+def test_patch_discriminator_all_bmp_sizes_and_grad():
+    """PatchGAN must forward + backprop for every trainable BMP size (size-aware
+    layer cap handles thin/small BMPs) and return a logit map + feature list."""
+    for spec in TRAINABLE_EXPORT_SPECS:
+        d = BMPPatchDiscriminator(base=16, n_layers=3, min_dim=min(spec.h, spec.w))
+        x = torch.rand(2, 3, spec.h, spec.w, requires_grad=True)
+        logit, feats = d(x)
+        assert logit.dim() == 4 and logit.shape[1] == 1, (spec.file_name, logit.shape)
+        assert len(feats) >= 1
+        logit.mean().backward()
+        assert x.grad is not None
 
 
 # Use small dims so all 11 sizes fit in CPU memory + time for the test.

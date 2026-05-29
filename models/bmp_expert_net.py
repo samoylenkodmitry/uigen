@@ -211,4 +211,50 @@ class BMPExpertNet(nn.Module):
         return torch.sigmoid(self.head(q))                               # [B, 3, H, W]
 
 
-__all__ = ["BMPExpertNet"]
+class BMPPatchDiscriminator(nn.Module):
+    """PatchGAN discriminator for adversarial BMP-expert training.
+
+    Judges real target BMP vs generated BMP at the patch level (a small
+    receptive field per output cell), forcing the generator off the L1
+    conditional-mean (blur) and onto crisp high-frequency detail — the part a
+    pixel regressor cannot "imagine" (e.g. EQMAIN's 1px slider grooves).
+    Spectral norm + LeakyReLU for stability; returns a logit map (hinge loss).
+    Training-only: never part of the saved expert checkpoint, so inference /
+    packaging / composition are unchanged.
+
+    Returns (logits, features) — features feed an optional feature-matching loss.
+    """
+
+    def __init__(self, base: int = 64, n_layers: int = 3, min_dim: int | None = None):
+        super().__init__()
+        # Auto-cap stride-2 downsamples so the smaller target dim stays workable
+        # (thin/small BMPs). Only the k4-s2 layers shrink; the final conv + head
+        # are k3-s1 (size-preserving) so they never under-run the kernel.
+        if min_dim is not None:
+            cap = max(1, int(math.floor(math.log2(max(2, min_dim)))) - 1)
+            n_layers = max(1, min(n_layers, cap))
+        def sn(c_in, c_out, k, stride):
+            return nn.utils.spectral_norm(
+                nn.Conv2d(c_in, c_out, kernel_size=k, stride=stride, padding=k // 2))
+        layers = [sn(3, base, 4, 2), nn.LeakyReLU(0.2, inplace=True)]
+        ch = base
+        for _ in range(1, n_layers):
+            nxt = min(ch * 2, base * 8)
+            layers += [sn(ch, nxt, 4, 2), nn.LeakyReLU(0.2, inplace=True)]
+            ch = nxt
+        nxt = min(ch * 2, base * 8)
+        layers += [sn(ch, nxt, 3, 1), nn.LeakyReLU(0.2, inplace=True)]  # size-preserving
+        self.body = nn.ModuleList(layers)
+        self.head = sn(nxt, 1, 3, 1)
+
+    def forward(self, x: torch.Tensor):
+        feats = []
+        h = x
+        for m in self.body:
+            h = m(h)
+            if isinstance(m, nn.LeakyReLU):
+                feats.append(h)
+        return self.head(h), feats
+
+
+__all__ = ["BMPExpertNet", "BMPPatchDiscriminator"]
