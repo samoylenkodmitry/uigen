@@ -42,29 +42,41 @@ KAGGLE_INPUT = Path("/kaggle/input")
 CKPTS_SLUG = "uigen-v10-ckpts"
 
 BMP = "EQMAIN.bmp"
-# EQMAIN's dense slider-sprite rows (116-315) plateaued at mae ~0.018 with the
-# legacy decoder (single H/4->H nearest jump smears high-freq detail; finer
-# query grid did NOT help). Progressive decoder (half-res + full-res refine)
-# is the fix. MAX_MINUTES is the hard 1h cap (project rule).
-# Capacity bump for EQMAIN's dense slider-sprite detail (legacy/progressive at
-# 256/128/2 plateaued ~mae 0.018-0.021; only the decode/render path needs more
-# capacity — the encoder already nails the visible window — so scale attn_dim/
-# dec_ch/attn_layers, not base, keeping encoder activation memory in T4 budget).
-STEPS = 12000
-BATCH = 2          # bigger decode config: batch 2 fits T4 16GB with headroom
-LR = 3e-4
+# RESOLVED (2026-05-29): EQMAIN's plateau (mae ~0.018-0.021, hidden slider rows
+# 116-315 smeared to yellow) was the OBJECTIVE, not capacity. L1 is loss-optimal
+# at the blurry conditional mean, so the 1px white slider grooves cannot be
+# reconstructed crisply. Capacity bumps (attn384/dec256/3L) did NOT help; the
+# fix is the GENERATIVE V10.1 recipe: SRGAN-style two-stage = L1 pretrain
+# (progressive decoder, BASE config) then ADVERSARIAL fine-tune from that ckpt.
+# Validated locally: hidden rows mae 0.036->0.00089, eval mae 0.019->0.00064,
+# hit5 0.948->0.998, grooves render crisp white. GAN-from-random DIVERGES — the
+# adversarial stage MUST --init-from the L1 checkpoint, and runs FP32 (the
+# adversarial path disables AMP; the GradScaler is fragile with the GAN loss).
 BASE = 48
-ATTN_DIM = 384
-DEC_CH = 256
-HEADS = 6
-ATTN_LAYERS = 3
+ATTN_DIM = 256
+DEC_CH = 128
+HEADS = 4
+ATTN_LAYERS = 2
 DECODER = "progressive"
-MAX_MINUTES = 60
-CHECKPOINT_EVERY = 2000
 PROGRESS_EVERY = 100
-AMP = True
-EVAL_EVERY = 500
-EVAL_MAX_ITEMS = 256
+EVAL_MAX_ITEMS = 96
+# Stage 1: L1 pretrain (reaches plateau ~step 1600). Early-stop on the L1 floor.
+S1_STEPS = 8000
+S1_BATCH = 2
+S1_LR = 3e-4
+S1_MAX_MINUTES = 25
+S1_AMP = True
+S1_EVAL_EVERY = 400
+# Stage 2: adversarial fine-tune from S1 best (collapses the plateau ~step 2400).
+# Gate for the adversarial stage is visual sharpness + hit5, NOT a strict L1 mae.
+S2_STEPS = 8000
+S2_BATCH = 2
+S2_LR = 1e-4
+S2_ADV_WEIGHT = 0.02
+S2_FM_WEIGHT = 1.0
+S2_D_LR = 2e-4
+S2_MAX_MINUTES = 30   # S1+S2 ~= 55 min, under the 1h rule
+S2_EVAL_EVERY = 800
 EARLY_STOP_MAE = 0.008
 EARLY_STOP_HIT5 = 0.93
 EARLY_STOP_PATIENCE = 2
@@ -130,22 +142,51 @@ csv_path = DATA_OUT / "csv" / "train_EQMAIN.csv"
 n_rows = sum(1 for _ in csv_path.open()) - 1 if csv_path.exists() else 0
 print(f"sanity: csv_rows={n_rows} target={(DATA_OUT / 'targets' / SKIN_ID / BMP).exists()}", flush=True)
 
-train_cmd = [
-    sys.executable, "train_bmp_expert.py",
-    "--data", str(DATA_OUT), "--bmp", BMP, "--out", str(RUN_OUT),
-    "--steps", str(STEPS), "--batch", str(BATCH), "--lr", str(LR),
+# Common model/eval knobs shared by both stages (the rebuilt model must match
+# at fine-tune time, so the architecture flags are identical across stages).
+_ARCH = [
     "--base", str(BASE), "--attn-dim", str(ATTN_DIM), "--dec-ch", str(DEC_CH),
-    "--heads", str(HEADS), "--attn-layers", str(ATTN_LAYERS),
-    "--decoder", DECODER, "--max-minutes", str(MAX_MINUTES),
-    "--checkpoint-every", str(CHECKPOINT_EVERY), "--progress-every", str(PROGRESS_EVERY),
-    "--eval-every", str(EVAL_EVERY), "--eval-max-items", str(EVAL_MAX_ITEMS),
-    "--early-stop", "--early-stop-mae", str(EARLY_STOP_MAE),
-    "--early-stop-hit5", str(EARLY_STOP_HIT5), "--early-stop-patience", str(EARLY_STOP_PATIENCE),
+    "--heads", str(HEADS), "--attn-layers", str(ATTN_LAYERS), "--decoder", DECODER,
+    "--eval-max-items", str(EVAL_MAX_ITEMS), "--progress-every", str(PROGRESS_EVERY),
     "--num-workers", "2", "--device", "cuda",
 ]
-if AMP:
-    train_cmd.append("--amp")
-summaries.append(run("05_train_EQMAIN", train_cmd, cwd=REPO, capture=False))
+
+# Stage 1: L1 pretrain (reaches the plateau; produces the anchor for the GAN).
+S1_OUT = RUNS_ROOT / "EQMAIN_s1"
+s1_cmd = [
+    sys.executable, "train_bmp_expert.py",
+    "--data", str(DATA_OUT), "--bmp", BMP, "--out", str(S1_OUT),
+    "--steps", str(S1_STEPS), "--batch", str(S1_BATCH), "--lr", str(S1_LR),
+    "--max-minutes", str(S1_MAX_MINUTES), "--eval-every", str(S1_EVAL_EVERY),
+    "--checkpoint-every", "2000",
+    "--early-stop", "--early-stop-mae", str(EARLY_STOP_MAE),
+    "--early-stop-hit5", str(EARLY_STOP_HIT5), "--early-stop-patience", str(EARLY_STOP_PATIENCE),
+    *_ARCH,
+]
+if S1_AMP:
+    s1_cmd.append("--amp")
+summaries.append(run("05a_train_EQMAIN_L1", s1_cmd, cwd=REPO, capture=False))
+
+# Stage 2: adversarial fine-tune from S1 best (collapses the plateau to crisp
+# grooves). FP32 (no --amp): the adversarial path disables AMP internally; the
+# GAN-from-random case DIVERGES, so --init-from the L1 anchor is mandatory.
+s1_init = S1_OUT / "best.safetensors"
+if not s1_init.exists():
+    s1_init = S1_OUT / "last.safetensors"
+s2_cmd = [
+    sys.executable, "train_bmp_expert.py",
+    "--data", str(DATA_OUT), "--bmp", BMP, "--out", str(RUN_OUT),
+    "--init-from", str(s1_init),
+    "--steps", str(S2_STEPS), "--batch", str(S2_BATCH), "--lr", str(S2_LR),
+    "--max-minutes", str(S2_MAX_MINUTES), "--eval-every", str(S2_EVAL_EVERY),
+    "--checkpoint-every", "1000",
+    "--adversarial", "--adv-weight", str(S2_ADV_WEIGHT),
+    "--fm-weight", str(S2_FM_WEIGHT), "--d-lr", str(S2_D_LR),
+    "--early-stop", "--early-stop-mae", str(EARLY_STOP_MAE),
+    "--early-stop-hit5", str(EARLY_STOP_HIT5), "--early-stop-patience", str(EARLY_STOP_PATIENCE),
+    *_ARCH,
+]
+summaries.append(run("05b_train_EQMAIN_adv", s2_cmd, cwd=REPO, capture=False))
 
 eval_dir = RUN_OUT / "eval"
 summaries.append(run("06_eval_EQMAIN", [
@@ -183,7 +224,8 @@ for name, p in artifacts.items():
     if p.exists():
         shutil.copy2(p, OUT / name)
 
-verdict = {"name": "V10 Gate 1 - EQMAIN", "skin": SKIN_ID, "steps_cap": STEPS, "batch": BATCH,
+verdict = {"name": "V10 Gate 1 - EQMAIN", "skin": SKIN_ID, "recipe": "L1+adversarial",
+           "s1_steps_cap": S1_STEPS, "s2_steps_cap": S2_STEPS, "batch": S2_BATCH,
            "criteria": "MAE<0.01 AND hit_5_255>0.90", "demo_prior_staged": staged, "pass": False}
 try:
     m = json.loads((eval_dir / "metrics.json").read_text())
