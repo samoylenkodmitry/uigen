@@ -46,14 +46,18 @@ BMP = "EQMAIN.bmp"
 # legacy decoder (single H/4->H nearest jump smears high-freq detail; finer
 # query grid did NOT help). Progressive decoder (half-res + full-res refine)
 # is the fix. MAX_MINUTES is the hard 1h cap (project rule).
+# Capacity bump for EQMAIN's dense slider-sprite detail (legacy/progressive at
+# 256/128/2 plateaued ~mae 0.018-0.021; only the decode/render path needs more
+# capacity — the encoder already nails the visible window — so scale attn_dim/
+# dec_ch/attn_layers, not base, keeping encoder activation memory in T4 budget).
 STEPS = 12000
-BATCH = 4
+BATCH = 2          # bigger decode config: batch 2 fits T4 16GB with headroom
 LR = 3e-4
 BASE = 48
-ATTN_DIM = 256
-DEC_CH = 128
-HEADS = 4
-ATTN_LAYERS = 2
+ATTN_DIM = 384
+DEC_CH = 256
+HEADS = 6
+ATTN_LAYERS = 3
 DECODER = "progressive"
 MAX_MINUTES = 60
 CHECKPOINT_EVERY = 2000
