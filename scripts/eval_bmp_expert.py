@@ -99,7 +99,12 @@ def main() -> int:
             raise SystemExit(f"checkpoint not found: {args.checkpoint} (and no last.safetensors next to it)")
     state = load_file(str(ckpt))
     model = _build_expert_from_state(state).to(device).eval()
-    model.load_state_dict(state)
+    # Tolerate pre-buffer checkpoints missing query_div_buf/decoder_kind_buf
+    # (constructor sets them); reject any other mismatch.
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    allowed = {"query_div_buf", "decoder_kind_buf"}
+    if unexpected or set(missing) - allowed:
+        raise RuntimeError(f"checkpoint mismatch: missing={missing} unexpected={unexpected}")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

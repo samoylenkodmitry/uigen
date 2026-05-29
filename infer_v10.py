@@ -59,7 +59,13 @@ def _build_expert_from_state(state: dict) -> BMPExpertNet:
 def _predict_bmp(checkpoint: Path, render_t: torch.Tensor, device) -> torch.Tensor:
     state = _load_state_dict(checkpoint)
     model = _build_expert_from_state(state).to(device).eval()
-    model.load_state_dict(state)
+    # Pre-buffer checkpoints (trained before query_div_buf/decoder_kind_buf) omit
+    # those keys; the constructor already set them from the inferred defaults, so
+    # tolerate exactly those missing buffers (and nothing else).
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    allowed = {"query_div_buf", "decoder_kind_buf"}
+    if unexpected or set(missing) - allowed:
+        raise RuntimeError(f"checkpoint mismatch: missing={missing} unexpected={unexpected}")
     with torch.no_grad():
         pred = model(render_t.unsqueeze(0).to(device))[0].cpu().clamp(0.0, 1.0)
     return pred
