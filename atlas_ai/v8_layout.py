@@ -161,6 +161,25 @@ def product_render_params(layout: dict) -> dict:
     }
 
 
+# A fixed, deterministic spread of slider positions for DEMO/inspection renders.
+# Neutral params hide the per-frame picture (every thumb at center); this exercises
+# the EQ band frames, volume/balance/posbar at distinct positions so the render
+# shows whether the skin's slider sprites are reproduced across their range.
+_DEMO_EQ_CURVE = [0.05, 0.20, 0.40, 0.55, 0.70, 0.85, 0.95, 0.75, 0.50, 0.30, 0.10]
+
+
+def demo_render_params(layout: dict) -> dict:
+    """product_render_params but with EQ/volume/balance/posbar at varied (still
+    deterministic) positions, so a demo render shows the slider sprites in use
+    across their range rather than all at neutral center."""
+    p = product_render_params(layout)
+    p["state"]["eq_values"] = list(_DEMO_EQ_CURVE)
+    p["state"]["volume"] = 0.72
+    p["state"]["balance"] = 0.38
+    p["state"]["posbar"] = 0.45
+    return p
+
+
 def draw_layout_overlay(image: Image.Image, layout: dict) -> Image.Image:
     overlay = image.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)

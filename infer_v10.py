@@ -31,7 +31,12 @@ sys.path.insert(0, str(REPO_ROOT))
 from atlas_ai.dataset_v10_bmp import CANVAS_H, CANVAS_W, _image_to_tensor
 from atlas_ai.export_spec import TRAINABLE_EXPORT_SPECS
 from atlas_ai.v8_assets import save_exported_tensors, tensor_to_image
-from atlas_ai.v8_layout import default_layout, normalize_mockup_image, product_render_params
+from atlas_ai.v8_layout import (
+    default_layout,
+    demo_render_params,
+    normalize_mockup_image,
+    product_render_params,
+)
 from atlas_ai.visible_extractor import playlist_pledit_text
 from models.bmp_expert_net import BMPExpertNet
 
@@ -81,6 +86,10 @@ def main() -> int:
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--no-render", action="store_true",
                     help="Skip the real-Cranamp render step (e.g., for tests).")
+    ap.add_argument("--demo-state", action="store_true",
+                    help="Render with varied (deterministic) EQ/volume/balance/posbar "
+                         "positions so the slider sprites are exercised across their "
+                         "range (default neutral hides the per-frame picture).")
     args = ap.parse_args()
 
     device = torch.device(args.device)
@@ -134,7 +143,8 @@ def main() -> int:
 
     # Deterministic real-Cranamp render of the generated .wsz.
     render_params_json = out / "render_params.json"
-    render_params_json.write_text(json.dumps(product_render_params(layout), indent=2))
+    rparams = demo_render_params(layout) if args.demo_state else product_render_params(layout)
+    render_params_json.write_text(json.dumps(rparams, indent=2))
     render_cranamp = out / "render_cranamp.png"
     res = subprocess.run(
         [str(CRANAMP_CLI), "render-params",
