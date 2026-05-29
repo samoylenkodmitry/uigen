@@ -104,6 +104,16 @@ def main() -> int:
     p.add_argument("--dec-ch", type=int, default=128)
     p.add_argument("--heads", type=int, default=4)
     p.add_argument("--attn-layers", type=int, default=2)
+    p.add_argument("--query-div", type=int, default=4,
+                   help="Query grid = target H/Q x W/Q. 4 (default) for small BMPs.")
+    p.add_argument("--decoder", choices=["legacy", "progressive"], default="legacy",
+                   help="legacy = single upsample + 2 blocks (small/smooth BMPs); "
+                        "progressive = half-res + full-res refine (high-freq detail, "
+                        "e.g. EQMAIN slider sprite rows).")
+    p.add_argument("--max-minutes", type=float, default=0.0,
+                   help="Hard wall-clock cap (minutes). Stop training when exceeded "
+                        "(then eval/save run normally). 0 disables. Project rule: "
+                        "no training run > 60 min.")
     p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--progress-every", type=int, default=50)
     p.add_argument("--checkpoint-every", type=int, default=500)
@@ -143,7 +153,8 @@ def main() -> int:
 
     model = BMPExpertNet(target_h=spec.h, target_w=spec.w, base=args.base,
                          attn_dim=args.attn_dim, dec_ch=args.dec_ch,
-                         heads=args.heads, attn_layers=args.attn_layers).to(device)
+                         heads=args.heads, attn_layers=args.attn_layers,
+                         query_div=args.query_div, decoder_kind=args.decoder).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                    weight_decay=args.weight_decay)
 
@@ -262,6 +273,12 @@ def main() -> int:
                       f"evals (mae={e_mae:.5f}<{args.early_stop_mae}, "
                       f"hit5={e_hit:.4f}>{args.early_stop_hit5})", flush=True)
                 break
+        # Hard wall-clock cap (project rule: no training run > ~60 min).
+        if args.max_minutes > 0 and (_time.monotonic() - start) / 60.0 >= args.max_minutes:
+            save_state_dict(out / "last.safetensors", model.state_dict())
+            print(f"TIME CAP at step {step}: hit --max-minutes {args.max_minutes} "
+                  f"(elapsed {(_time.monotonic() - start) / 60.0:.1f}min)", flush=True)
+            break
     save_state_dict(out / "last.safetensors", model.state_dict())
     metrics_f.close()
     if eval_f is not None:

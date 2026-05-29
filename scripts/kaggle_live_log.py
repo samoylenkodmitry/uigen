@@ -192,7 +192,7 @@ def fetch_progress_lines(kernel_url: str, settle_seconds: float = 15.0) -> list[
             ".join('\\n')"
             ".split('\\n')"
             ".filter(t => /(\\[step\\s+\\d+\\/\\d+|\\[eval @ step|training start:|V10 train:|"
-            "EARLY STOP|trained (V7Completer|MAIN|CBUTTONS|EQMAIN|PLEDIT|TITLEBAR|VOLUME|"
+            "EARLY STOP|TIME CAP|trained (V7Completer|MAIN|CBUTTONS|EQMAIN|PLEDIT|TITLEBAR|VOLUME|"
             "BALANCE|POSBAR|SHUFREP|MONOSTER|PLAYPAUS)|\\bby_(mode|file|skin):)/.test(t))"
             ".join('\\n')"
         )

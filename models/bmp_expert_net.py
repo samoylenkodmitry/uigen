@@ -100,13 +100,19 @@ class BMPExpertNet(nn.Module):
 
     def __init__(self, target_h: int, target_w: int, *,
                  base: int = 48, attn_dim: int = 256, dec_ch: int = 128,
-                 heads: int = 4, attn_layers: int = 2,
+                 heads: int = 4, attn_layers: int = 2, query_div: int = 4,
+                 decoder_kind: str = "legacy",
                  freqs: tuple[int, ...] = DEFAULT_FREQS,
                  kv_pool: tuple[tuple[int, int], ...] = DEFAULT_KV_POOL):
         super().__init__()
         self.target_h = int(target_h)
         self.target_w = int(target_w)
         self.attn_dim = attn_dim
+        # Query grid is target H/query_div x W/query_div. Smaller divisor = finer
+        # grid = more queries (more attention cost) but less reliance on the
+        # final upsample, which large/detailed targets (e.g. EQMAIN 275x315) need
+        # to break the ~mae 0.018 plateau seen with query_div=4.
+        self.query_div = max(1, int(query_div))
         self.freqs = tuple(int(f) for f in freqs)
         self.kv_pool = tuple((int(h), int(w)) for (h, w) in kv_pool)
         if len(self.kv_pool) != 4:
@@ -137,8 +143,19 @@ class BMPExpertNet(nn.Module):
         self.attn_blocks = nn.ModuleList([_CrossAttnBlock(attn_dim, heads)
                                           for _ in range(attn_layers)])
 
-        # Decoder: nearest upsample from query grid to target HxW + residual conv blocks.
+        # Decoder. "legacy": single nearest jump (query grid -> target) + 2 resblocks
+        # (fine for smooth/small BMPs). "progressive": refine at half-res then
+        # full-res before the 2 blocks, recovering high-frequency detail that the
+        # single jump smears (needed for EQMAIN's dense slider sprite rows, where
+        # legacy plateaus at ~mae 0.018 on rows 116-315). pre1/pre2 exist only in
+        # progressive mode so legacy checkpoints load unchanged.
+        if decoder_kind not in ("legacy", "progressive"):
+            raise ValueError(f"decoder_kind must be legacy|progressive, got {decoder_kind!r}")
+        self.decoder_kind = decoder_kind
         self.dec_proj = nn.Conv2d(attn_dim, dec_ch, 1)
+        if decoder_kind == "progressive":
+            self.pre1 = _ResBlock(dec_ch, dec_ch)   # refine at half target res
+            self.pre2 = _ResBlock(dec_ch, dec_ch)   # refine at full target res
         self.up1 = _ResBlock(dec_ch, dec_ch)
         self.up2 = _ResBlock(dec_ch, dec_ch)
         self.head = nn.Conv2d(dec_ch, 3, 1)
@@ -149,12 +166,14 @@ class BMPExpertNet(nn.Module):
         self.register_buffer("target_w_buf", torch.tensor([self.target_w], dtype=torch.int32))
         for name, val in (("base_buf", base), ("attn_dim_buf", attn_dim),
                           ("dec_ch_buf", dec_ch), ("heads_buf", heads),
-                          ("attn_layers_buf", attn_layers)):
+                          ("attn_layers_buf", attn_layers),
+                          ("query_div_buf", self.query_div),
+                          ("decoder_kind_buf", 1 if decoder_kind == "progressive" else 0)):
             self.register_buffer(name, torch.tensor([val], dtype=torch.int32))
 
     def _query_grid(self, b: int, device, dtype) -> torch.Tensor:
-        qh = max(1, self.target_h // 4)
-        qw = max(1, self.target_w // 4)
+        qh = max(1, self.target_h // self.query_div)
+        qw = max(1, self.target_w // self.query_div)
         coords = _fourier_coords(qh, qw, self.freqs, device, dtype)  # [C, qh, qw]
         coords = coords.permute(1, 2, 0).reshape(qh * qw, -1)         # [qh*qw, C]
         q = self.query_proj(coords).unsqueeze(0).expand(b, -1, -1)    # [B, qh*qw, attn_dim]
@@ -180,7 +199,13 @@ class BMPExpertNet(nn.Module):
             q = blk(q, kv)
         q = q.transpose(1, 2).reshape(b, self.attn_dim, qh, qw)         # [B, D, qh, qw]
         q = self.dec_proj(q)                                             # [B, dec_ch, qh, qw]
-        q = F.interpolate(q, size=(self.target_h, self.target_w), mode="nearest")
+        if self.decoder_kind == "progressive":
+            h2 = max(1, self.target_h // 2)
+            w2 = max(1, self.target_w // 2)
+            q = self.pre1(F.interpolate(q, size=(h2, w2), mode="nearest"))
+            q = self.pre2(F.interpolate(q, size=(self.target_h, self.target_w), mode="nearest"))
+        else:
+            q = F.interpolate(q, size=(self.target_h, self.target_w), mode="nearest")
         q = self.up1(q)
         q = self.up2(q)
         return torch.sigmoid(self.head(q))                               # [B, 3, H, W]

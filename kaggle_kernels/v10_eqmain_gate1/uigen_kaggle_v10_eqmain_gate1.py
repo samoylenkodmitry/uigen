@@ -42,7 +42,11 @@ KAGGLE_INPUT = Path("/kaggle/input")
 CKPTS_SLUG = "uigen-v10-ckpts"
 
 BMP = "EQMAIN.bmp"
-STEPS = 15000
+# EQMAIN's dense slider-sprite rows (116-315) plateaued at mae ~0.018 with the
+# legacy decoder (single H/4->H nearest jump smears high-freq detail; finer
+# query grid did NOT help). Progressive decoder (half-res + full-res refine)
+# is the fix. MAX_MINUTES is the hard 1h cap (project rule).
+STEPS = 12000
 BATCH = 4
 LR = 3e-4
 BASE = 48
@@ -50,6 +54,8 @@ ATTN_DIM = 256
 DEC_CH = 128
 HEADS = 4
 ATTN_LAYERS = 2
+DECODER = "progressive"
+MAX_MINUTES = 60
 CHECKPOINT_EVERY = 2000
 PROGRESS_EVERY = 100
 AMP = True
@@ -126,6 +132,7 @@ train_cmd = [
     "--steps", str(STEPS), "--batch", str(BATCH), "--lr", str(LR),
     "--base", str(BASE), "--attn-dim", str(ATTN_DIM), "--dec-ch", str(DEC_CH),
     "--heads", str(HEADS), "--attn-layers", str(ATTN_LAYERS),
+    "--decoder", DECODER, "--max-minutes", str(MAX_MINUTES),
     "--checkpoint-every", str(CHECKPOINT_EVERY), "--progress-every", str(PROGRESS_EVERY),
     "--eval-every", str(EVAL_EVERY), "--eval-max-items", str(EVAL_MAX_ITEMS),
     "--early-stop", "--early-stop-mae", str(EARLY_STOP_MAE),

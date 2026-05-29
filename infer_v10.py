@@ -51,6 +51,8 @@ def _build_expert_from_state(state: dict) -> BMPExpertNet:
         base=g("base_buf"), attn_dim=g("attn_dim_buf"),
         dec_ch=g("dec_ch_buf"), heads=g("heads_buf"),
         attn_layers=g("attn_layers_buf"),
+        query_div=g("query_div_buf") if "query_div_buf" in state else 4,
+        decoder_kind=("progressive" if ("decoder_kind_buf" in state and g("decoder_kind_buf")==1) else "legacy"),
     )
 
 
