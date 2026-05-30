@@ -46,6 +46,7 @@ def _build_expert_from_state(state: dict) -> BMPExpertNet:
         dec_ch=g("dec_ch_buf"), heads=g("heads_buf"),
         attn_layers=g("attn_layers_buf"),
         query_div=g("query_div_buf") if "query_div_buf" in state else 4,
+        kv_scale=g("kv_scale_buf") if "kv_scale_buf" in state else 1,
         decoder_kind=("progressive" if ("decoder_kind_buf" in state and g("decoder_kind_buf")==1) else "legacy"),
     )
 
@@ -102,7 +103,7 @@ def main() -> int:
     # Tolerate pre-buffer checkpoints missing query_div_buf/decoder_kind_buf
     # (constructor sets them); reject any other mismatch.
     missing, unexpected = model.load_state_dict(state, strict=False)
-    allowed = {"query_div_buf", "decoder_kind_buf"}
+    allowed = {"query_div_buf", "decoder_kind_buf", "kv_scale_buf"}
     if unexpected or set(missing) - allowed:
         raise RuntimeError(f"checkpoint mismatch: missing={missing} unexpected={unexpected}")
 

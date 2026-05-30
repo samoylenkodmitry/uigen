@@ -70,6 +70,29 @@ Persistent ground truth for the V10 Gate-2+ architecture search. Read this first
   sweeps, `--append` for multi-skin). Scales: smoke/gate1/gate2.
 - Lightning bootstrap: `scripts/lightning_gate2.sh`.
 
+## Search findings (live)
+- **s16 (2026-05-30): MAIN trained on 16 skins MEMORIZES, does NOT generalize.**
+  train mae 0.038 vs HELD-OUT (16 disjoint skins) mae **0.311**, hit5 0.03 — an 8x
+  gap. Local 2070, smoke views, 55min/11k steps. Held-out datasets:
+  data_v10_train{16,64}, data_v10_held16 (disjoint, from data_v10_skins256).
+- **HYPOTHESIS to test (architectural):** MAIN.bmp is largely VISIBLE in the
+  render (main window shows it), so recovering it for an unseen skin is mostly a
+  geometric un-transform of the visible region + imagine-occluded — this SHOULD
+  generalize. The fixed, lossy KV pool (DEFAULT_KV_POOL 48x28..18x10, ~2.4k
+  tokens) may destroy the spatial detail needed to RECONSTRUCT an unseen detailed
+  BMP, so the decoder memorizes seen skins instead. If s64 also fails held-out,
+  test architectures that preserve spatial detail (larger/higher-res KV pool, or
+  encoder→decoder skip/U-Net path) BEFORE concluding "need more skins". This is a
+  real architecture-search axis and is fully consistent with whole-input/no-crop.
+- **s64 (2026-05-30): 64 skins -> held-out mae 0.261 (hit5 0.007), train 0.109.**
+  vs s16 held 0.311/train 0.038. Diversity helps held-out monotonically
+  (0.311->0.261) BUT both runs are badly UNDER-TRAINED (55min/8-11k steps on 2070;
+  one skin alone needed ~7k; s64 hasn't fit train). So the generalization signal
+  is real-but-weak and CONFOUNDED by throughput. Can't yet separate "arch can't
+  generalize" from "not converged". The 2070 + 55min is under-powered for a clean
+  multi-skin generalization read. Next: a CLEANER test (faster GPU to converge, or
+  detail-preserving arch A/B) — pending user steer on resource allocation.
+
 ## Search plan (current)
 1. Materialize a diverse N-skin set from `skins_raw/` (scale 14→60→… as needed).
 2. Data-diversity scaling: does generalization keep improving as skins +

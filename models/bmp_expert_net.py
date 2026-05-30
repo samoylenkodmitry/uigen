@@ -101,7 +101,7 @@ class BMPExpertNet(nn.Module):
     def __init__(self, target_h: int, target_w: int, *,
                  base: int = 48, attn_dim: int = 256, dec_ch: int = 128,
                  heads: int = 4, attn_layers: int = 2, query_div: int = 4,
-                 decoder_kind: str = "legacy",
+                 decoder_kind: str = "legacy", kv_scale: int = 1,
                  freqs: tuple[int, ...] = DEFAULT_FREQS,
                  kv_pool: tuple[tuple[int, int], ...] = DEFAULT_KV_POOL):
         super().__init__()
@@ -114,7 +114,14 @@ class BMPExpertNet(nn.Module):
         # to break the ~mae 0.018 plateau seen with query_div=4.
         self.query_div = max(1, int(query_div))
         self.freqs = tuple(int(f) for f in freqs)
-        self.kv_pool = tuple((int(h), int(w)) for (h, w) in kv_pool)
+        # kv_scale multiplies the per-level K/V pool resolution. The default
+        # avg-pool to ~2.4k tokens (kv_scale=1) is a ~700x averaging bottleneck
+        # that blurs local appearance -> the decoder memorizes per-skin instead of
+        # reading input detail (V11 diagnosis). kv_scale>1 gives the cross-attention
+        # richer, less-lossy conditioning so it can generalize style->atlas.
+        self.kv_scale = max(1, int(kv_scale))
+        self.kv_pool = tuple((int(h) * self.kv_scale, int(w) * self.kv_scale)
+                             for (h, w) in kv_pool)
         if len(self.kv_pool) != 4:
             raise ValueError("kv_pool must have one (h, w) per encoder level (4 total)")
 
@@ -168,6 +175,7 @@ class BMPExpertNet(nn.Module):
                           ("dec_ch_buf", dec_ch), ("heads_buf", heads),
                           ("attn_layers_buf", attn_layers),
                           ("query_div_buf", self.query_div),
+                          ("kv_scale_buf", self.kv_scale),
                           ("decoder_kind_buf", 1 if decoder_kind == "progressive" else 0)):
             self.register_buffer(name, torch.tensor([val], dtype=torch.int32))
 
