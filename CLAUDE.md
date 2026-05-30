@@ -1,5 +1,16 @@
 # Project conventions for AI agents
 
+## V10 (current work): read HANDOFF_V10_SEARCH.md first
+
+V10 = one ML model per skin component (per BMP); input = the WHOLE arbitrary skin
+mockup (never cropped); each model imagines its full sprite atlas incl. all hidden
+states in the input's style. Hard facts, resources, and budget rules live in
+**HANDOFF_V10_SEARCH.md**. Non-negotiables: NEVER crop the input; ≤1 hour per
+training run; the ~70 free Lightning GPU-hrs are for architecture SEARCH (cheap
+1hr probes), not train-to-convergence; the local RTX 2070 is free+unlimited (use
+it first); `skins_raw/` holds 7,957 source skins (the diversity asset); the paid
+full-train comes later at ≤$100.
+
 ## Long-running scripts MUST emit progress to stdout
 
 Any script that runs for more than ~30 seconds — training loops, eval
