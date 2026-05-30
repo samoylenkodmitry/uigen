@@ -30,10 +30,11 @@ ALL_EXPERTS = [  # easy -> hard (Gate-1 experience)
     "MAIN", "CBUTTONS", "PLEDIT", "BALANCE", "TITLEBAR", "EQMAIN",
 ]
 
-# Shared architecture (identical at L1 and adversarial stages).
-ARCH = ["--base", "48", "--attn-dim", "256", "--dec-ch", "128",
-        "--heads", "4", "--attn-layers", "2", "--query-div", "4",
-        "--decoder", "progressive"]
+# Default shared architecture (identical at L1 and adversarial stages). Override
+# via --base/--attn-dim/--dec-ch/--attn-layers/--heads when a multi-skin run
+# plateaus and needs more capacity (Gate 2 stresses the model far more than the
+# one-skin Gate 1, so capacity is the first escalation lever).
+DEF_ARCH = dict(base=48, attn_dim=256, dec_ch=128, heads=4, attn_layers=2)
 
 
 def auto_batch(device: str) -> int:
@@ -100,7 +101,16 @@ def main() -> int:
     ap.add_argument("--eval-every", type=int, default=600)
     ap.add_argument("--eval-max-items", type=int, default=160)
     ap.add_argument("--no-amp", action="store_true", help="Disable AMP for the L1 stage.")
+    ap.add_argument("--base", type=int, default=DEF_ARCH["base"])
+    ap.add_argument("--attn-dim", type=int, default=DEF_ARCH["attn_dim"])
+    ap.add_argument("--dec-ch", type=int, default=DEF_ARCH["dec_ch"])
+    ap.add_argument("--heads", type=int, default=DEF_ARCH["heads"])
+    ap.add_argument("--attn-layers", type=int, default=DEF_ARCH["attn_layers"])
     args = ap.parse_args()
+    arch = ["--base", str(args.base), "--attn-dim", str(args.attn_dim),
+            "--dec-ch", str(args.dec_ch), "--heads", str(args.heads),
+            "--attn-layers", str(args.attn_layers), "--query-div", "4",
+            "--decoder", "progressive"]
 
     data = Path(args.data)
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
@@ -134,7 +144,7 @@ def main() -> int:
             "--out", str(l1_out), "--steps", str(args.l1_steps), "--batch", str(batch),
             "--lr", "3e-4", "--max-minutes", str(args.l1_max_min),
             "--eval-every", str(args.eval_every), "--eval-max-items", str(args.eval_max_items),
-            "--checkpoint-every", "3000", *es, *ARCH,
+            "--checkpoint-every", "3000", *es, *arch,
             "--progress-every", "200", "--num-workers", "2", "--device", args.device,
         ]
         if not args.no_amp:
@@ -158,7 +168,7 @@ def main() -> int:
                 "--eval-every", str(args.eval_every), "--eval-max-items", str(args.eval_max_items),
                 "--checkpoint-every", "2000",
                 "--adversarial", "--adv-weight", "0.02", "--fm-weight", "1.0", "--d-lr", "2e-4",
-                *es, *ARCH, "--progress-every", "200", "--num-workers", "2", "--device", args.device,
+                *es, *arch, "--progress-every", "200", "--num-workers", "2", "--device", args.device,
             ]
             run(f"train_{stem}_ADV", adv_cmd, out)
             ab = adv_out / "best.safetensors"
