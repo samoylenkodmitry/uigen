@@ -97,6 +97,33 @@ kv A/B (CBUTTONS, train64, 6k steps, held16): kv1 held 0.276 / train 0.138;
 kv2 held 0.253 / train 0.131. Richer KV helps ~8% but BOTH under-trained ->
 inconclusive until native-res makes runs converge. Re-run A/B at native res.
 
+## CLEAN RESULT (2026-05-31, native res) — it's MEMORIZATION, not under-training
+Native res let CBUTTONS/train64 actually CONVERGE (train mae 0.019 @23k steps, vs
+0.138 under-trained at 1728). kv1 held-out still 0.287 (hit5 0.015). So with
+training CONVERGED, held-out is still near-random => the base arch MEMORIZES the
+64 training skins (keyed on skin identity) and does NOT learn the general
+read-appearance->emit-atlas mapping. This is the decisive read the under-powered
+runs couldn't give.
+WHY: with only 64 skins, the memorization solution (store 64 atlases) is reachable
+and lower-loss-faster than the general solution. cranamp's geometry/state jitter
+makes it view-invariant but the TARGET atlas is constant per skin, so jitter does
+NOT prevent atlas memorization. Color/style augmentation is NOT a clean fix here
+(the task requires EXACT color reproduction from the input — can't jitter colors
+away). The clean lever is MORE SKINS: enough that memorizing all atlases is harder
+than learning the general mapping.
+NEXT (native res makes it feasible): scale training skins 64 -> 240/256 (held16
+fixed), measure held-out. If held-out drops sharply, "scale skins" is the path
+(paid full-train uses thousands of the 7957). If 240 still memorizes, need a
+stronger inductive bias (architecture that forces output = fn of local input
+appearance, not a global skin code). kv2 result pending (richer KV may help or may
+just give more capacity to memorize).
+
+## kv_scale REFUTED (2026-05-31, native, converged)
+CBUTTONS/train64/held16: kv1 held 0.287 (train 0.019), kv2 held 0.293 (train
+0.027). Richer K/V did NOT improve held-out. => the bottleneck is NOT conditioning
+resolution; it's that 64 skins is memorizable. Use kv_scale=1 (default) going
+forward. Lever = skin count / inductive bias, tested next via 64->240 scaling.
+
 ## Status / ledger
 - 256 diverse skins extracted (data_v10_skins256); held16 / train16 / train64
   render sets built (smoke views). s16/s64 scaling done (see HANDOFF_V10_SEARCH).
