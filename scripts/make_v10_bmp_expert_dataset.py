@@ -172,7 +172,13 @@ def main() -> int:
     ap.add_argument("--append", action="store_true",
                     help="Append CSV rows instead of overwriting (multi-skin).")
     ap.add_argument("--progress-every", type=int, default=50)
+    ap.add_argument("--canvas-w", type=int, default=CANVAS_W,
+                    help="Render canvas width. Default 960 (skin upscaled ~3.3x). "
+                         "Smaller (e.g. 384) renders the WHOLE UI at near-native "
+                         "resolution = same info, ~10x cheaper to train.")
+    ap.add_argument("--canvas-h", type=int, default=CANVAS_H)
     args = ap.parse_args()
+    cw, ch = args.canvas_w, args.canvas_h
 
     skin_src = Path(args.skin)
     out = Path(args.out)
@@ -196,7 +202,7 @@ def main() -> int:
 
     plan = _plan(SCALE_CAPS[args.scale])
     print(f"V10 dataset: skin={args.skin_id} scale={args.scale} variants={len(plan)} "
-          f"out={out} canvas={CANVAS_W}x{CANVAS_H}", flush=True)
+          f"out={out} canvas={cw}x{ch}", flush=True)
 
     # Per-BMP CSVs (open in append mode if --append, else write headers).
     csv_files = {}
@@ -217,9 +223,9 @@ def main() -> int:
     last_t = t0
     for vid, (family, overrides) in enumerate(plan):
         seed = args.seed * 10_000_000 + vid
-        params = rand_params(seed, CANVAS_W, CANVAS_H)
+        params = rand_params(seed, cw, ch)
         params = _override(params, family, **overrides)
-        renderer = render_with_params(skin_src, params, CANVAS_W, CANVAS_H)
+        renderer = render_with_params(skin_src, params, cw, ch)
         vid_str = f"{vid:06d}"
         render_path = out / "renders" / f"{args.skin_id}_{vid_str}.png"
         state_path = out / "states" / f"{args.skin_id}_{vid_str}.json"

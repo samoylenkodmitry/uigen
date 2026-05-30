@@ -79,6 +79,24 @@ keep the generative + augmentation bias.
 4. Per-component tuning on the hard sprite-sheet BMPs (EQMAIN) with adversarial.
 5. Lock architecture + recipe; write the ≤$100 full-train plan (all skins).
 
+## KEY EFFICIENCY INSIGHT (2026-05-30) — native-resolution whole input
+Every multi-skin run so far is grossly UNDER-TRAINED (train mae ~0.13 at 6k steps
+vs single-skin 0.0005 @7k), so architecture A/Bs are noise. ROOT CAUSE: the
+cranamp render is generated at scale 2.8-3.4 — the ~275px-wide skin upscaled to a
+960-wide / 1728-tall canvas. That canvas carries NO more information than the
+skin's native res (~520x290); it's ~3.3x upscaled pixels. So we pay ~10x encoder
+compute/step for zero extra info -> nothing converges in <=1hr -> every compare
+is muddy.
+FIX: render/feed the WHOLE input at NATIVE resolution (~10x cheaper, same info,
+same detail; NOT a crop, NOT a downsample-that-loses-info — upscaling added
+nothing). Then training converges in budget and architecture A/Bs become clean.
+Product-time: downscale the high-res mockup to the model's input size; output
+atlas is native-res pixel art regardless. Keep transform/scale diversity but
+centered near native (e.g. scale ~0.8-1.4, not 2.8-3.4).
+kv A/B (CBUTTONS, train64, 6k steps, held16): kv1 held 0.276 / train 0.138;
+kv2 held 0.253 / train 0.131. Richer KV helps ~8% but BOTH under-trained ->
+inconclusive until native-res makes runs converge. Re-run A/B at native res.
+
 ## Status / ledger
 - 256 diverse skins extracted (data_v10_skins256); held16 / train16 / train64
   render sets built (smoke views). s16/s64 scaling done (see HANDOFF_V10_SEARCH).

@@ -65,7 +65,12 @@ class BMPExpertDataset(Dataset):
         # CSV writes to the same target file size).
         with Image.open(self.root / self.rows[0]["target_bmp"]) as im:
             self.target_size = im.size  # (W, H)
-        self.input_size = (CANVAS_W, CANVAS_H)
+        # Use the render's NATIVE size (renders in one dataset share a canvas).
+        # The old 960x1728 canvas was the ~275px skin upscaled ~3.3x — same info,
+        # 10x the compute. Native-res renders (smaller canvas) train far faster
+        # with no information loss. Falls back to the legacy constant if needed.
+        with Image.open(self.root / self.rows[0]["render_png"]) as im:
+            self.input_size = im.size  # (W, H)
 
     def __len__(self) -> int:
         return len(self.rows)
