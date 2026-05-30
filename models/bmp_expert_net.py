@@ -102,6 +102,7 @@ class BMPExpertNet(nn.Module):
                  base: int = 48, attn_dim: int = 256, dec_ch: int = 128,
                  heads: int = 4, attn_layers: int = 2, query_div: int = 4,
                  decoder_kind: str = "legacy", kv_scale: int = 1,
+                 style_mod: bool = False,
                  freqs: tuple[int, ...] = DEFAULT_FREQS,
                  kv_pool: tuple[tuple[int, int], ...] = DEFAULT_KV_POOL):
         super().__init__()
@@ -167,6 +168,21 @@ class BMPExpertNet(nn.Module):
         self.up2 = _ResBlock(dec_ch, dec_ch)
         self.head = nn.Conv2d(dec_ch, 3, 1)
 
+        # V11 style modulation: factorize SHARED structure x per-skin STYLE.
+        # struct_tokens = a learned, skin-independent content prior per atlas query
+        # position (the "what goes where"); the global style code (from the deepest
+        # encoder features) FiLM-modulates the decoder (skin art injected by
+        # modulation, not generated from scratch). Off by default (baseline ckpts
+        # load unchanged).
+        self.style_mod = bool(style_mod)
+        if self.style_mod:
+            qh = max(1, self.target_h // self.query_div)
+            qw = max(1, self.target_w // self.query_div)
+            self.struct_tokens = nn.Parameter(torch.zeros(1, qh * qw, attn_dim))
+            self.style_mlp = nn.Sequential(
+                nn.Linear(base * 8, attn_dim), nn.SiLU(inplace=True),
+                nn.Linear(attn_dim, dec_ch * 2))
+
         # Buffers for reconstructibility from a checkpoint alone.
         self.register_buffer("model_version", torch.tensor([10], dtype=torch.int32))
         self.register_buffer("target_h_buf", torch.tensor([self.target_h], dtype=torch.int32))
@@ -176,6 +192,7 @@ class BMPExpertNet(nn.Module):
                           ("attn_layers_buf", attn_layers),
                           ("query_div_buf", self.query_div),
                           ("kv_scale_buf", self.kv_scale),
+                          ("style_mod_buf", 1 if self.style_mod else 0),
                           ("decoder_kind_buf", 1 if decoder_kind == "progressive" else 0)):
             self.register_buffer(name, torch.tensor([val], dtype=torch.int32))
 
@@ -203,10 +220,16 @@ class BMPExpertNet(nn.Module):
         # K/V = concat pooled spatial tokens across scales (~2.4k tokens default).
         kv = torch.cat([fi.flatten(2).transpose(1, 2) for fi in feats], dim=1)  # [B, sumHW, D]
         q, qh, qw = self._query_grid(b, x.device, x.dtype)
+        if self.style_mod:
+            q = q + self.struct_tokens                                   # shared structure prior
         for blk in self.attn_blocks:
             q = blk(q, kv)
         q = q.transpose(1, 2).reshape(b, self.attn_dim, qh, qw)         # [B, D, qh, qw]
         q = self.dec_proj(q)                                             # [B, dec_ch, qh, qw]
+        if self.style_mod:
+            style = f4.mean(dim=(2, 3))                                  # [B, c4] global style
+            gamma, beta = self.style_mlp(style).chunk(2, dim=1)         # FiLM params
+            q = q * (1.0 + gamma[:, :, None, None]) + beta[:, :, None, None]
         if self.decoder_kind == "progressive":
             h2 = max(1, self.target_h // 2)
             w2 = max(1, self.target_w // 2)

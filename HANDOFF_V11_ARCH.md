@@ -124,6 +124,35 @@ CBUTTONS/train64/held16: kv1 held 0.287 (train 0.019), kv2 held 0.293 (train
 resolution; it's that 64 skins is memorizable. Use kv_scale=1 (default) going
 forward. Lever = skin count / inductive bias, tested next via 64->240 scaling.
 
+## SCALING (64->240) barely helps; ROOT CAUSE = inductive bias (2026-05-31)
+CBUTTONS native held-out: 16 skins 0.311 / 64 skins 0.287 (train 0.019, converged)
+/ 240 skins 0.275 (train 0.067, UNDER-converged). Held creeps down with scale but
+far too slowly, and bigger sets won't converge in-budget. Refuted/insufficient:
+kv_scale (conditioning res), native-res compute (enabled convergence, exposed
+memorization), moderate scaling. => the model lacks the INDUCTIVE BIAS to
+generalize style->atlas; it memorizes.
+
+## PROPOSED V11 ARCHITECTURE: factorize structure (shared) x style (per-skin)
+Domain fact: Winamp components have FIXED structure across skins (button layout,
+slider-frame arrangement in the atlas); only the ART/STYLE varies. So:
+  atlas(skin) = render( SHARED canonical structure , skin STYLE/appearance )
+Design:
+  - A learned, skin-INDEPENDENT canonical structure for the component (e.g. the
+    Fourier query grid + learned per-position content tokens) = the "what goes
+    where" of the atlas. Shared => generalizes for free.
+  - A STYLE/appearance code + spatial features read from the WHOLE input via the
+    encoder + cross-attention; inject it by MODULATION (FiLM/AdaIN) of the shared
+    structure, not by generating from scratch. Few skins suffice to learn a style
+    EXTRACTOR (low-dim) + a structure that's shared.
+  - Generative (adversarial) decoder synthesizes hidden frames (proven for EQMAIN).
+  - Fits the creative product: CatAmp = standard slider STRUCTURE + cat STYLE,
+    imagined across all frames.
+Optional higher-leverage add: a PRETRAINED image encoder for the input (rich
+generalizable features from millions of images) so visual representation isn't
+learned from scratch on few skins. Consider after the FiLM factorization.
+TEST: same CBUTTONS/train64->held16 native protocol; expect held-out to drop
+substantially vs 0.287 if the factorization is the missing bias.
+
 ## Status / ledger
 - 256 diverse skins extracted (data_v10_skins256); held16 / train16 / train64
   render sets built (smoke views). s16/s64 scaling done (see HANDOFF_V10_SEARCH).

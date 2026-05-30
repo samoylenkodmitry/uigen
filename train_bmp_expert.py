@@ -110,6 +110,10 @@ def main() -> int:
                    help="Multiply cross-attention K/V pool resolution. 1 = default "
                         "(~2.4k tokens, lossy). >1 = richer conditioning (V11) so the "
                         "model can read input detail and generalize style->atlas.")
+    p.add_argument("--style-mod", action="store_true",
+                   help="V11: factorize shared structure (learned struct tokens) x "
+                        "per-skin style (FiLM-modulated decoder from global encoder "
+                        "feats). Targets generalization (vs memorization) across skins.")
     p.add_argument("--decoder", choices=["legacy", "progressive"], default="legacy",
                    help="legacy = single upsample + 2 blocks (small/smooth BMPs); "
                         "progressive = half-res + full-res refine (high-freq detail, "
@@ -173,7 +177,7 @@ def main() -> int:
                          attn_dim=args.attn_dim, dec_ch=args.dec_ch,
                          heads=args.heads, attn_layers=args.attn_layers,
                          query_div=args.query_div, decoder_kind=args.decoder,
-                         kv_scale=args.kv_scale).to(device)
+                         kv_scale=args.kv_scale, style_mod=args.style_mod).to(device)
     if args.init_from:
         from safetensors.torch import load_file as _load
         init_state = _load(args.init_from)
