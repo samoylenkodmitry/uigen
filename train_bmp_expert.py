@@ -110,6 +110,10 @@ def main() -> int:
                    help="Multiply cross-attention K/V pool resolution. 1 = default "
                         "(~2.4k tokens, lossy). >1 = richer conditioning (V11) so the "
                         "model can read input detail and generalize style->atlas.")
+    p.add_argument("--encoder", choices=["scratch", "convnext"], default="scratch",
+                   help="scratch = from-scratch CNN; convnext = FROZEN pretrained "
+                        "ConvNeXt-Tiny pyramid + raw-RGB stream (transferable features "
+                        "for cross-skin generalization, V11).")
     p.add_argument("--color-aug", action="store_true",
                    help="V11: paired equivariant color aug — same random gamma/gain/"
                         "bias on BOTH render and target each sample. Breaks fixed-atlas "
@@ -181,7 +185,8 @@ def main() -> int:
                          attn_dim=args.attn_dim, dec_ch=args.dec_ch,
                          heads=args.heads, attn_layers=args.attn_layers,
                          query_div=args.query_div, decoder_kind=args.decoder,
-                         kv_scale=args.kv_scale, style_mod=args.style_mod).to(device)
+                         kv_scale=args.kv_scale, style_mod=args.style_mod,
+                         encoder=args.encoder).to(device)
     if args.init_from:
         from safetensors.torch import load_file as _load
         init_state = _load(args.init_from)

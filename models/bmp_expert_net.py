@@ -102,7 +102,7 @@ class BMPExpertNet(nn.Module):
                  base: int = 48, attn_dim: int = 256, dec_ch: int = 128,
                  heads: int = 4, attn_layers: int = 2, query_div: int = 4,
                  decoder_kind: str = "legacy", kv_scale: int = 1,
-                 style_mod: bool = False,
+                 style_mod: bool = False, encoder: str = "scratch",
                  freqs: tuple[int, ...] = DEFAULT_FREQS,
                  kv_pool: tuple[tuple[int, int], ...] = DEFAULT_KV_POOL):
         super().__init__()
@@ -126,20 +126,35 @@ class BMPExpertNet(nn.Module):
         if len(self.kv_pool) != 4:
             raise ValueError("kv_pool must have one (h, w) per encoder level (4 total)")
 
-        # Encoder: 4 stages, strides 2/4/8/16 relative to input.
-        c1, c2, c3, c4 = base, base * 2, base * 4, base * 8
-        self.stem = _conv_block(3, c1, stride=2)         # /2
-        self.e1 = _conv_block(c1, c2, stride=2)          # /4
-        self.e2 = _conv_block(c2, c3, stride=2)          # /8
-        self.e3 = _conv_block(c3, c4, stride=2)          # /16
-
-        # FPN: project each level to attn_dim for cross-attention K/V.
-        self.proj = nn.ModuleList([
-            nn.Conv2d(c1, attn_dim, 1),
-            nn.Conv2d(c2, attn_dim, 1),
-            nn.Conv2d(c3, attn_dim, 1),
-            nn.Conv2d(c4, attn_dim, 1),
-        ])
+        # Encoder. "scratch" = the from-scratch 4-stage CNN (memorizes with few
+        # skins). "convnext" = FROZEN pretrained ConvNeXt-Tiny feature pyramid for
+        # transferable visual features + a shallow raw-RGB stream (frozen nets drop
+        # exact palette / 1px UI detail) — codex's top generalization lever.
+        self.encoder = encoder
+        if encoder == "convnext":
+            from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
+            bb = convnext_tiny(weights=ConvNeXt_Tiny_Weights.DEFAULT).features
+            for p in bb.parameters():
+                p.requires_grad_(False)
+            self.cnx = bb.eval()
+            self._cnx_capture = {1, 3, 5, 7}      # stage outputs: /4,/8,/16,/32
+            self.register_buffer("imnet_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+            self.register_buffer("imnet_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+            self.proj = nn.ModuleList([nn.Conv2d(c, attn_dim, 1) for c in (96, 192, 384, 768)])
+            self.rgb_stem = nn.Sequential(_conv_block(3, 32, stride=2), _conv_block(32, 64, stride=2))
+            self.rgb_proj = nn.Conv2d(64, attn_dim, 1)
+        else:
+            c1, c2, c3, c4 = base, base * 2, base * 4, base * 8
+            self.stem = _conv_block(3, c1, stride=2)         # /2
+            self.e1 = _conv_block(c1, c2, stride=2)          # /4
+            self.e2 = _conv_block(c2, c3, stride=2)          # /8
+            self.e3 = _conv_block(c3, c4, stride=2)          # /16
+            self.proj = nn.ModuleList([
+                nn.Conv2d(c1, attn_dim, 1),
+                nn.Conv2d(c2, attn_dim, 1),
+                nn.Conv2d(c3, attn_dim, 1),
+                nn.Conv2d(c4, attn_dim, 1),
+            ])
 
         # Query embedding (Fourier coords -> attn_dim).
         coord_ch = 2 + 4 * len(self.freqs)
@@ -193,6 +208,7 @@ class BMPExpertNet(nn.Module):
                           ("query_div_buf", self.query_div),
                           ("kv_scale_buf", self.kv_scale),
                           ("style_mod_buf", 1 if self.style_mod else 0),
+                          ("encoder_buf", 1 if encoder == "convnext" else 0),
                           ("decoder_kind_buf", 1 if decoder_kind == "progressive" else 0)):
             self.register_buffer(name, torch.tensor([val], dtype=torch.int32))
 
@@ -208,15 +224,31 @@ class BMPExpertNet(nn.Module):
         if x.dim() != 4 or x.shape[1] != 3:
             raise ValueError(f"x must be [B,3,H,W], got {tuple(x.shape)}")
         b = x.shape[0]
-        f1 = self.stem(x)
-        f2 = self.e1(f1)
-        f3 = self.e2(f2)
-        f4 = self.e3(f3)
-        feats = []
-        for i, f in enumerate((f1, f2, f3, f4)):
-            f = self.proj[i](f)
-            f = F.adaptive_avg_pool2d(f, self.kv_pool[i])
-            feats.append(f)
+        if self.encoder == "convnext":
+            with torch.no_grad():                      # frozen backbone
+                h = (x - self.imnet_mean) / self.imnet_std
+                stages = []
+                for i, layer in enumerate(self.cnx):
+                    h = layer(h)
+                    if i in self._cnx_capture:
+                        stages.append(h.float())
+            feats = []
+            for i, f in enumerate(stages):
+                f = self.proj[i](f)
+                feats.append(F.adaptive_avg_pool2d(f, self.kv_pool[i]))
+            r = self.rgb_proj(self.rgb_stem(x))         # learnable raw-RGB stream
+            feats.append(F.adaptive_avg_pool2d(r, self.kv_pool[0]))
+            f4 = stages[-1]                              # for style_mod global code
+        else:
+            f1 = self.stem(x)
+            f2 = self.e1(f1)
+            f3 = self.e2(f2)
+            f4 = self.e3(f3)
+            feats = []
+            for i, f in enumerate((f1, f2, f3, f4)):
+                f = self.proj[i](f)
+                f = F.adaptive_avg_pool2d(f, self.kv_pool[i])
+                feats.append(f)
         # K/V = concat pooled spatial tokens across scales (~2.4k tokens default).
         kv = torch.cat([fi.flatten(2).transpose(1, 2) for fi in feats], dim=1)  # [B, sumHW, D]
         q, qh, qw = self._query_grid(b, x.device, x.dtype)
