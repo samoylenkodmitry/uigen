@@ -220,7 +220,8 @@ class BMPExpertNet(nn.Module):
         q = self.query_proj(coords).unsqueeze(0).expand(b, -1, -1)    # [B, qh*qw, attn_dim]
         return q, qh, qw
 
-    def forward(self, x: torch.Tensor, return_style: bool = False):
+    def forward(self, x: torch.Tensor, return_style: bool = False,
+                return_style_tokens: bool = False):
         if x.dim() != 4 or x.shape[1] != 3:
             raise ValueError(f"x must be [B,3,H,W], got {tuple(x.shape)}")
         b = x.shape[0]
@@ -254,6 +255,10 @@ class BMPExpertNet(nn.Module):
         # K/V = concat pooled spatial tokens across scales (~2.4k tokens default).
         kv = torch.cat([fi.flatten(2).transpose(1, 2) for fi in feats], dim=1)  # [B, sumHW, D]
         z_style = feats[3].mean(dim=(2, 3))   # [B, attn_dim] render style code (for cond-D)
+        # spatial style tokens (deepest scale) for SPATIAL conditional-D cross-attn:
+        # [B, Nk, attn_dim] — D patches attend over these (atlas<->render coord mismatch
+        # rules out a spatially-aligned dot, so cross-attn pulls the right style per patch)
+        z_tokens = feats[3].flatten(2).transpose(1, 2)
         q, qh, qw = self._query_grid(b, x.device, x.dtype)
         if self.style_mod:
             q = q + self.struct_tokens                                   # shared structure prior
@@ -275,6 +280,8 @@ class BMPExpertNet(nn.Module):
         q = self.up1(q)
         q = self.up2(q)
         out = torch.sigmoid(self.head(q))                                # [B, 3, H, W]
+        if return_style and return_style_tokens:
+            return out, z_style, z_tokens
         return (out, z_style) if return_style else out
 
 
@@ -293,7 +300,7 @@ class BMPPatchDiscriminator(nn.Module):
     """
 
     def __init__(self, base: int = 64, n_layers: int = 3, min_dim: int | None = None,
-                 style_dim: int | None = None):
+                 style_dim: int | None = None, style_spatial: bool = False):
         super().__init__()
         # Auto-cap stride-2 downsamples so the smaller target dim stays workable
         # (thin/small BMPs). Only the k4-s2 layers shrink; the final conv + head
@@ -318,9 +325,20 @@ class BMPPatchDiscriminator(nn.Module):
         # compatible with this render-style code z?" z comes from the generator's
         # input-render encoder (available at product inference). Off if style_dim None.
         self._final_ch = nxt
-        if style_dim is not None:
+        self.style_spatial = style_spatial
+        if style_dim is not None and not style_spatial:
+            # GLOBAL projection: one pooled style vector broadcast over all patches.
             self.style_ln = nn.LayerNorm(style_dim)
             self.style_proj = nn.Linear(style_dim, nxt)
+        elif style_dim is not None and style_spatial:
+            # SPATIAL projection: each D patch cross-attends over the render style
+            # tokens, so D can score LOCAL atlas-material/state fidelity (codex lever #1),
+            # not just global "blue-vs-red skin". Single-head, cheap.
+            d_a = min(style_dim, 128)
+            self._sd_a = d_a
+            self.tok_ln = nn.LayerNorm(style_dim)
+            self.tok_kv = nn.Linear(style_dim, 2 * d_a)
+            self.patch_q = nn.Conv2d(nxt, d_a, kernel_size=1)
 
     def forward(self, x: torch.Tensor, z: torch.Tensor | None = None):
         feats = []
@@ -331,9 +349,23 @@ class BMPPatchDiscriminator(nn.Module):
                 feats.append(h)
         logits = self.head(h)
         if z is not None and hasattr(self, "style_proj"):
+            # GLOBAL projection (z = [B, style_dim])
             s = self.style_proj(self.style_ln(z))                     # [B, C]
             proj = (h * s[:, :, None, None]).sum(1, keepdim=True) / (self._final_ch ** 0.5)
             logits = logits + proj
+        elif z is not None and hasattr(self, "patch_q"):
+            # SPATIAL projection (z = style tokens [B, Nk, style_dim]): each D patch
+            # cross-attends over the render tokens, then Miyato-dots the attended
+            # context => per-patch style-compatibility score.
+            tok = self.tok_ln(z)                                      # [B, Nk, Cs]
+            k, v = self.tok_kv(tok).chunk(2, dim=-1)                  # each [B, Nk, d]
+            q = self.patch_q(h)                                       # [B, d, Hh, Wh]
+            bsz, d_a, hh, ww = q.shape
+            qf = q.flatten(2).transpose(1, 2)                         # [B, Np, d]
+            attn = torch.softmax(qf @ k.transpose(1, 2) / (d_a ** 0.5), dim=-1)  # [B,Np,Nk]
+            ctx = attn @ v                                            # [B, Np, d]
+            proj = (qf * ctx).sum(-1) / (d_a ** 0.5)                  # [B, Np]
+            logits = logits + proj.view(bsz, 1, hh, ww)
         return logits, feats
 
 

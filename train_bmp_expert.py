@@ -35,6 +35,24 @@ from models.bmp_expert_net import BMPExpertNet, BMPPatchDiscriminator
 SPEC_BY_NAME = {s.file_name: s for s in TRAINABLE_EXPORT_SPECS}
 
 
+def _wrong_index(skin_ids, n: int, device) -> torch.Tensor:
+    """Per batch position i, return index j of a DIFFERENT-skin sample (the
+    mismatched-real negative for the conditional D). Falls back to (i+1)%n only if
+    every sample shares a skin. skin_ids may be None (no metadata) -> plain roll."""
+    if not skin_ids or len(skin_ids) != n:
+        return torch.arange(n, device=device).roll(1, 0)
+    out = []
+    for i in range(n):
+        j = (i + 1) % n
+        for s in range(1, n):
+            cand = (i + s) % n
+            if skin_ids[cand] != skin_ids[i]:
+                j = cand
+                break
+        out.append(j)
+    return torch.tensor(out, device=device, dtype=torch.long)
+
+
 def _sobel(x: torch.Tensor) -> torch.Tensor:
     kx = x.new_tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]).view(1, 1, 3, 3)
     ky = x.new_tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]).view(1, 1, 3, 3)
@@ -151,6 +169,10 @@ def main() -> int:
                    help="V11: CONDITIONAL projection discriminator — D sees the atlas + "
                         "the render-style code z (from the generator's input encoder), with "
                         "mismatched-real negatives, to force SKIN-SPECIFIC (not generic) output.")
+    p.add_argument("--spatial-cond-d", action="store_true",
+                   help="V11 cond-D lever: SPATIAL conditioning — D patches cross-attend over "
+                        "the render's style TOKENS (not a single global pooled style vector), so "
+                        "D scores LOCAL atlas material/state fidelity. Requires --cond-disc.")
     p.add_argument("--d-base", type=int, default=64, help="PatchGAN base channels.")
     p.add_argument("--d-layers", type=int, default=3, help="PatchGAN downsample layers.")
     p.add_argument("--init-from", default=None,
@@ -212,7 +234,8 @@ def main() -> int:
     if args.adversarial:
         disc = BMPPatchDiscriminator(base=args.d_base, n_layers=args.d_layers,
                                      min_dim=min(spec.h, spec.w),
-                                     style_dim=(args.attn_dim if args.cond_disc else None)).to(device)
+                                     style_dim=(args.attn_dim if args.cond_disc else None),
+                                     style_spatial=(args.cond_disc and args.spatial_cond_d)).to(device)
         d_opt = torch.optim.AdamW(disc.parameters(), lr=args.d_lr, betas=(0.5, 0.9),
                                   weight_decay=args.weight_decay)
 
@@ -306,9 +329,15 @@ def main() -> int:
             # --- CONDITIONAL projection D: atlas + render-style z, with a
             # mismatched-real negative (real atlas + WRONG skin's z => fake) so D
             # must judge atlas<->style COMPATIBILITY, not just atlas plausibility. ---
-            out_y, z = model(x, return_style=True)
+            if args.spatial_cond_d:
+                out_y, _, z = model(x, return_style=True, return_style_tokens=True)
+            else:
+                out_y, z = model(x, return_style=True)
             z = z.detach()
-            zw = z.roll(1, 0)                                  # different skin's style (batch roll)
+            # skin-id-safe mismatch: per item, pick a batch partner from a DIFFERENT skin
+            # (so the mismatched-real negative is genuinely atlas<->style-incompatible).
+            widx = _wrong_index(batch.get("skin_id"), z.shape[0], z.device)
+            zw = z[widx]                                       # different skin's style
             d_real, _ = disc(y, z)
             d_fake, _ = disc(out_y.detach(), z)
             d_mis, _ = disc(y, zw)

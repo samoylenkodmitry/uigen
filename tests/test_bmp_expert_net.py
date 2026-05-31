@@ -24,6 +24,31 @@ def test_patch_discriminator_all_bmp_sizes_and_grad():
         assert x.grad is not None
 
 
+def test_conditional_discriminator_global_and_spatial():
+    """Conditional projection D: both the GLOBAL (pooled style vector) and SPATIAL
+    (cross-attend over render style tokens) heads must forward + backprop and accept
+    the style code the generator exposes via return_style / return_style_tokens."""
+    g = BMPExpertNet(target_h=36, target_w=136, base=16, attn_dim=64,
+                     dec_ch=32, heads=2, attn_layers=1, query_div=4)
+    x = torch.rand(2, 3, 696, 384)
+    out, z_vec, z_tok = g(x, return_style=True, return_style_tokens=True)
+    assert z_vec.shape == (2, 64) and z_tok.dim() == 3 and z_tok.shape[2] == 64
+    y = torch.rand(2, 3, 36, 136)
+    # GLOBAL: z is the pooled vector
+    dg = BMPPatchDiscriminator(base=16, n_layers=2, min_dim=36, style_dim=64)
+    lg, _ = dg(y, z_vec.detach())
+    assert lg.dim() == 4 and lg.shape[1] == 1
+    lg.mean().backward()
+    # SPATIAL: z is the token set; mismatched negative uses a rolled index
+    ds = BMPPatchDiscriminator(base=16, n_layers=2, min_dim=36, style_dim=64,
+                               style_spatial=True)
+    zt = z_tok.detach()
+    ls, _ = ds(y, zt)
+    lm, _ = ds(y, zt[torch.arange(2).roll(1, 0)])
+    assert ls.shape == lm.shape and ls.shape[1] == 1
+    (ls.mean() + lm.mean()).backward()
+
+
 # Use small dims so all 11 sizes fit in CPU memory + time for the test.
 _TINY = dict(base=8, attn_dim=32, dec_ch=16, heads=2, attn_layers=1)
 
