@@ -273,3 +273,9 @@ other pillar = SCALE unique skins (64 is a memorization trap) -> train CBUTTONS 
 <=$100 paid full-train plan (all 7957 skins). Re-consult codex (OUTSIDE sandbox:
 dangerouslyDisableSandbox) at each decision. Probe ckpts live in /tmp (volatile;
 re-runnable). Datasets data_v10n_* + data_v10_skins256 on disk.
+
+## RESUME CORRECTION (2026-05-31): cond-disc probe was KILLED at step 2000 (paused
+for GPU), so its COND numbers == the warm-start color-aug baseline -> INCONCLUSIVE.
+ON RESUME: re-run /tmp/cond_test.sh to completion (~45min free 2070), judge by
+cond_eval gap/diversity + /tmp/cond_cbuttons/eval_held grid. Then: scale unique skins;
+lock recipe; <=$100 paid full-train. Consult codex OUTSIDE sandbox at decisions.
