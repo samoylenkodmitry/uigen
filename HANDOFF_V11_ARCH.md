@@ -403,3 +403,17 @@ own<=.285; strong if div>=.36]. (2) SPATIAL cond-D probe, warm-start 240 ckpt 45
 [GO if beats global cond-D by +0.02 div & +0.01 gap, own not worse >.01]. (3) HARD-
 component smoke EQMAIN or VOLUME same recipe 45-60min [GO if no OOM, descends, cond_eval
 non-generic]. "Near lock; not fully locked until 240 cond-disc + one hard component pass."
+
+## PROBE (1) GLOBAL cond-disc AT SCALE (2026-05-31) — modest, BELOW bar
+240-skin scale ckpt -> global cond-disc FT (adv .03, fm .5, d-lr 4e-4, d-base48 d-layers2)
+-> step 12276. cond_eval held16: own .2696 shuf .4145 gap +.1449 div .3206 ratio .78.
+vs 240 scale base (pre-cond): gap +.144 div .313. => only +.008 div (global cond-disc
+helps LESS at 240 than at 64: +.008 vs +.023). MISSES codex go-bar (div>=.345 gap>=.150).
+Confirms GLOBAL conditioning ceiling -> motivates SPATIAL cond-D.
+ckpt /tmp/v11_scale240_cond_cbuttons.
+
+## PROBE (2) SPATIAL cond-D AT SCALE (2026-05-31) — IN FLIGHT
+Implemented (commit 34bb14f): D patches cross-attend over render style TOKENS + skin-id-
+safe mismatched negative. Clean A/B: SAME 240-skin warm-start as probe(1), --spatial-cond-d.
+Codex go-bar: beat global by +.02 div & +.01 gap, own not worse >.01 => target div>=.341
+gap>=.155 own<=.280. ckpt /tmp/v11_scale240_spatcond_cbuttons.
