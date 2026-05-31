@@ -47,9 +47,17 @@ class BMPExpertDataset(Dataset):
     """
 
     def __init__(self, root: str | Path, bmp_file_name: str, *,
-                 csv_path: str | Path | None = None, color_aug: bool = False):
+                 csv_path: str | Path | None = None, color_aug: bool = False,
+                 fast_renders: bool = False):
         self.root = Path(root)
         self.bmp_file_name = bmp_file_name
+        # fast_renders: read pre-decoded uint8 .npy renders (scripts/prepack_renders.py)
+        # instead of decoding PNG every __getitem__. PNG decode is the data-loading
+        # bottleneck on native-res renders; the .npy cache is built ONCE and shared
+        # across epochs + all 11 component trainings. Falls back to PNG if a .npy is
+        # missing, so it is always safe to enable.
+        self.fast_renders = bool(fast_renders)
+        self._target_cache: dict[str, torch.Tensor] = {}  # unique targets repeat across variants
         # Paired equivariant color augmentation (training only): the SAME random
         # per-channel gain/bias/gamma is applied to BOTH the render input AND the
         # target atlas, so the colorway changes every sample -> the model cannot
@@ -81,10 +89,23 @@ class BMPExpertDataset(Dataset):
     def __len__(self) -> int:
         return len(self.rows)
 
+    def _render_tensor(self, rel: str) -> torch.Tensor:
+        if self.fast_renders:
+            npy = self.root / "renders_npy" / (Path(rel).stem + ".npy")
+            if npy.exists():
+                arr = np.load(npy)  # [H,W,3] uint8
+                t = torch.from_numpy(arr.transpose(2, 0, 1).copy()).float() / 255.0
+                return t.contiguous()
+        return _image_to_tensor(self.root / rel, size=self.input_size)
+
     def __getitem__(self, index: int) -> dict:
         r = self.rows[index]
-        render = _image_to_tensor(self.root / r["render_png"], size=self.input_size)
-        target = _image_to_tensor(self.root / r["target_bmp"], size=self.target_size)
+        render = self._render_tensor(r["render_png"])
+        tkey = r["target_bmp"]
+        target = self._target_cache.get(tkey)
+        if target is None:
+            target = _image_to_tensor(self.root / tkey, size=self.target_size)
+            self._target_cache[tkey] = target
         if self.color_aug:
             # same per-channel gamma/gain/bias for render AND target (equivariant)
             g = torch.empty(3, 1, 1).uniform_(0.6, 1.5)        # gamma

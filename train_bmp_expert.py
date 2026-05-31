@@ -149,6 +149,12 @@ def main() -> int:
                         "(then eval/save run normally). 0 disables. Project rule: "
                         "no training run > 60 min.")
     p.add_argument("--num-workers", type=int, default=0)
+    p.add_argument("--prefetch-factor", type=int, default=4,
+                   help="DataLoader prefetch per worker (only when num-workers>0).")
+    p.add_argument("--fast-renders", action="store_true",
+                   help="Read pre-decoded uint8 .npy renders (scripts/prepack_renders.py) "
+                        "instead of decoding PNG every step. Big speedup on the data-bound "
+                        "native-res pipeline; falls back to PNG per-render if a .npy is missing.")
     p.add_argument("--progress-every", type=int, default=50)
     p.add_argument("--checkpoint-every", type=int, default=500)
     p.add_argument("--seed", type=int, default=0)
@@ -208,9 +214,13 @@ def main() -> int:
 
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
-    ds = BMPExpertDataset(args.data, args.bmp, color_aug=args.color_aug)
-    loader = DataLoader(ds, batch_size=args.batch, shuffle=True, drop_last=False,
-                        num_workers=args.num_workers, pin_memory=(device.type == "cuda"))
+    ds = BMPExpertDataset(args.data, args.bmp, color_aug=args.color_aug,
+                          fast_renders=args.fast_renders)
+    _dl_kw = dict(num_workers=args.num_workers, pin_memory=(device.type == "cuda"))
+    if args.num_workers > 0:
+        _dl_kw["persistent_workers"] = True
+        _dl_kw["prefetch_factor"] = args.prefetch_factor
+    loader = DataLoader(ds, batch_size=args.batch, shuffle=True, drop_last=False, **_dl_kw)
 
     model = BMPExpertNet(target_h=spec.h, target_w=spec.w, base=args.base,
                          attn_dim=args.attn_dim, dec_ch=args.dec_ch,
