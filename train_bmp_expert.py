@@ -157,6 +157,11 @@ def main() -> int:
                    help="Initialize the generator from a checkpoint (same arch). For "
                         "adversarial: pretrain with L1 first, then fine-tune from it — "
                         "GAN from random weights diverges.")
+    p.add_argument("--resume", action="store_true",
+                   help="Resume from <out>/last.safetensors + <out>/train_state.pt if "
+                        "present (restores step, optimizer, disc, best, streak) so a "
+                        "killed/paused run continues instead of restarting. Safe to pass "
+                        "always: no state -> starts fresh.")
     # Periodic eval + early stop. One-skin overfit: eval-subset MAE/hit5 is the
     # true gate signal (less noisy than the running-mean train loss). Stops the
     # long flat refinement tail once the gate is comfortably met.
@@ -211,6 +216,19 @@ def main() -> int:
         d_opt = torch.optim.AdamW(disc.parameters(), lr=args.d_lr, betas=(0.5, 0.9),
                                   weight_decay=args.weight_decay)
 
+    # Resume: restore weights + optimizer + step (+ disc) so a paused/killed run
+    # continues instead of restarting. Safe to always pass (no state -> fresh).
+    resume_state = None
+    out = Path(args.out)
+    if args.resume and (out / "last.safetensors").exists() and (out / "train_state.pt").exists():
+        from safetensors.torch import load_file as _rload
+        model.load_state_dict(_rload(str(out / "last.safetensors")), strict=False)
+        resume_state = torch.load(out / "train_state.pt", map_location=device, weights_only=False)
+        optimizer.load_state_dict(resume_state["optimizer"])
+        if disc is not None and resume_state.get("disc") is not None:
+            disc.load_state_dict(resume_state["disc"]); d_opt.load_state_dict(resume_state["d_opt"])
+        print(f"RESUMED from {out}/last.safetensors at step {resume_state.get('step', 0)}", flush=True)
+
     # Periodic-eval subset: seeded shuffle so it spans all state families (the
     # dataset is ordered by family, so first-N would be unrepresentative).
     eval_loader = None
@@ -252,10 +270,23 @@ def main() -> int:
               f"patience={args.early_stop_patience})", flush=True)
 
     model.train()
-    step = 0
-    best = float("inf")
-    best_eval_mae = float("inf")
-    pass_streak = 0
+    step = int(resume_state.get("step", 0)) if resume_state else 0
+    best = float(resume_state.get("best", float("inf"))) if resume_state else float("inf")
+    best_eval_mae = float(resume_state.get("best_eval_mae", float("inf"))) if resume_state else float("inf")
+    pass_streak = int(resume_state.get("pass_streak", 0)) if resume_state else 0
+    if resume_state and "scaler" in resume_state and resume_state["scaler"] is not None:
+        try: scaler.load_state_dict(resume_state["scaler"])
+        except Exception: pass
+
+    def _save_resume(s: int) -> None:
+        """Persist full train state next to last.safetensors so --resume continues."""
+        torch.save({"step": s, "optimizer": optimizer.state_dict(),
+                    "best": best, "best_eval_mae": best_eval_mae, "pass_streak": pass_streak,
+                    "scaler": scaler.state_dict(),
+                    "disc": disc.state_dict() if disc is not None else None,
+                    "d_opt": d_opt.state_dict() if d_opt is not None else None},
+                   out / "train_state.pt")
+
     stopped_early = False
     recent: list[float] = []
     recent_mae: list[float] = []
@@ -342,6 +373,7 @@ def main() -> int:
                 save_state_dict(out / "best.safetensors", model.state_dict())
         if (step % args.checkpoint_every == 0) or step == args.steps:
             save_state_dict(out / "last.safetensors", model.state_dict())
+            _save_resume(step)
         if args.progress_every > 0 and step % args.progress_every == 0:
             now = _time.monotonic()
             sps = (now - last_t) / args.progress_every
@@ -372,6 +404,7 @@ def main() -> int:
                   flush=True)
             if args.early_stop and pass_streak >= args.early_stop_patience:
                 save_state_dict(out / "last.safetensors", model.state_dict())
+                _save_resume(step)
                 stopped_early = True
                 print(f"EARLY STOP at step {step}: eval gate held {pass_streak} consecutive "
                       f"evals (mae={e_mae:.5f}<{args.early_stop_mae}, "
@@ -380,6 +413,7 @@ def main() -> int:
         # Hard wall-clock cap (project rule: no training run > ~60 min).
         if args.max_minutes > 0 and (_time.monotonic() - start) / 60.0 >= args.max_minutes:
             save_state_dict(out / "last.safetensors", model.state_dict())
+            _save_resume(step)
             print(f"TIME CAP at step {step}: hit --max-minutes {args.max_minutes} "
                   f"(elapsed {(_time.monotonic() - start) / 60.0:.1f}min)", flush=True)
             break

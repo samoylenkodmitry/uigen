@@ -279,3 +279,11 @@ for GPU), so its COND numbers == the warm-start color-aug baseline -> INCONCLUSI
 ON RESUME: re-run /tmp/cond_test.sh to completion (~45min free 2070), judge by
 cond_eval gap/diversity + /tmp/cond_cbuttons/eval_held grid. Then: scale unique skins;
 lock recipe; <=$100 paid full-train. Consult codex OUTSIDE sandbox at decisions.
+
+## RESUMABILITY (2026-05-31): kill/pause no longer restarts from 0.
+train_bmp_expert.py --resume restores weights+optimizer+step(+disc) from
+<out>/last.safetensors + <out>/train_state.pt (saved every checkpoint-every +
+exit). v10_gate_sweep.py passes --resume + checkpoint-every 1500. scripts/v11_probe.sh
+= resumable per-component probe (re-run SAME cmd -> continues; --steps huge, each
+launch runs to --max-minutes). Runners must NOT rm -rf the out dir. Verified:
+train 150 -> resume -> "RESUMED at step 150" -> continued to 300.

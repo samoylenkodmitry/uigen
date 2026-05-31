@@ -144,7 +144,7 @@ def main() -> int:
             "--out", str(l1_out), "--steps", str(args.l1_steps), "--batch", str(batch),
             "--lr", "3e-4", "--max-minutes", str(args.l1_max_min),
             "--eval-every", str(args.eval_every), "--eval-max-items", str(args.eval_max_items),
-            "--checkpoint-every", "3000", *es, *arch,
+            "--checkpoint-every", "1500", "--resume", *es, *arch,
             "--progress-every", "200", "--num-workers", "2", "--device", args.device,
         ]
         if not args.no_amp:
@@ -166,7 +166,7 @@ def main() -> int:
                 "--steps", str(args.adv_steps), "--batch", str(batch), "--lr", "1e-4",
                 "--max-minutes", str(args.adv_max_min),
                 "--eval-every", str(args.eval_every), "--eval-max-items", str(args.eval_max_items),
-                "--checkpoint-every", "2000",
+                "--checkpoint-every", "1500", "--resume",
                 "--adversarial", "--adv-weight", "0.02", "--fm-weight", "1.0", "--d-lr", "2e-4",
                 *es, *arch, "--progress-every", "200", "--num-workers", "2", "--device", args.device,
             ]
