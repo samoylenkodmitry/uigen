@@ -237,3 +237,21 @@ skins -> known-skin lookup, unknown-skin prior. Codex verdict:
   more unique skins, NOT more 64-skin encoder search.
 - Next probe: warm-start best color-aug ckpt -> short ADV FT, judge by conditionality
   (own<shuffled, diversity up), not MAE.
+
+## CONDITIONAL DISCRIMINATOR design (codex, 2026-05-31) — adopted
+Projection patch discriminator (Miyato) conditioned on a style code from the
+INPUT-RENDER encoder only (available at product inference):
+- z_style = global-avg-pool of generator's deepest PROJECTED encoder feature
+  (feats[3].mean over spatial -> [B, attn_dim]); DETACH before D.
+- D: logits = uncond_head(h); style = style_proj(LayerNorm(z)); 
+     proj = (h*style[:,:,None,None]).sum(1,keepdim=True)/sqrt(C); return logits+proj, feats.
+- MISMATCHED-real negatives (essential, else D ignores z): hinge
+  L_D = relu(1-D(y,z)).mean() + 0.5*relu(1+D(yhat.detach(),z)).mean()
+        + 0.5*relu(1+D(y, z_wrong)).mean()   # z_wrong = different skin in batch
+- G: L_rec + 0.03*L_adv + 0.5*L_fm (start adv low). G lr 1e-4 warm-start, D lr 4e-4,
+  1 D step/G step, keep color-aug on, warm-start from best color-aug ckpt.
+- D small: d_base 32-48, d_layers 2 (CBUTTONS). Ensure mismatches are truly diff
+  skin (use batch skin_id). Detach z. Watch D overpower (d_loss->0, MAE up -> lower adv).
+SUCCESS (not MAE alone): own-vs-shuffled gap WIDENS beyond 0.27/0.41, pred diversity
+rises toward 0.41 ceiling, grids crisper AND still skin-varying. If both own&shuffled
+improve equally -> just sharpened generic atlas (fail).
