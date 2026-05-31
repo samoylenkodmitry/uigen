@@ -361,3 +361,45 @@ step 0 or FT phase? (5) which paid GPU/provider for best $/throughput under $100
 SEQUENCING: finish converged 240-skin CBUTTONS probe (gap/div plateau above 64-base)
 -> add cond-disc at scale -> consult codex to LOCK recipe + finalize this plan ->
 generate full native-res dataset (CPU, free) -> user buys GPU -> paid train.
+
+## SCALE PROBE chunk3 (2026-05-31) — SCALE CONFIRMED + ceiling identified
+240-skin color-aug -> step 37372 (~153 smpl/skin). cond_eval held16 full trajectory:
+  c1 step12356 ~51/skin:  own .278 shuf .398 gap +.120 div .287 ratio .69
+  c2 step24826 ~102/skin: own .280 shuf .417 gap +.137 div .319 ratio .77
+  c3 step37372 ~153/skin: own .271 shuf .414 gap +.144 div .313 ratio .76
+  64-skin CONVERGED ~193/skin: own .269 shuf .410 gap +.141 div .312 ratio .76
+FINDINGS: (1) SCALE GENERALIZES w/ NO memorization penalty — 240 skins MATCHES/beats
+the 64-skin converged baseline on ALL conditioning metrics at LESS per-skin exposure
+(=> safe to use all 7787 skins). (2) But conditioning PLATEAUS at an architecture-set
+ceiling (gap ~.14, div ~.31, ratio stuck ~.76); scale alone didn't push div past it
+(c2->c3 div flattened .319->.313). => cond-disc is the lever for diversity/crispness
+(it took 64-skin div .312->.335). CANDIDATE FINAL RECIPE = SYNTHESIS scale + cond-disc.
+NEXT: cond-disc FT warm-started from this 240-skin ckpt (does div push past .335 toward
+.41 ceiling at scale?) + consult codex (full trajectory, diversity-ceiling question,
+paid-train plan review). ckpt /tmp/v11_scale240_cbuttons.
+
+## CODEX CONSULT #4 (2026-05-31) — ceiling diagnosis + paid plan + lock criteria
+Q1 PLATEAU = architecture/objective ceiling (NOT under-train; train mae drops while div
+flattens). TOP 2 LEVERS: (1) SPATIAL conditional D — cond-D today uses only GLOBAL pooled
+z_style (bmp_expert_net.py ~254); make D patch features cross-attend to encoder style
+tokens OR dot against a style map at D-logit resolution; ALSO make z_wrong skin-id-safe
+(not plain roll, train_bmp_expert.py ~311). (2) ATLAS-GRAMMAR query feats (slot/state/
+local-UV labels; cheap for CBUTTONS). NOT: diffusion/VAE head (inflates div w/o
+faithfulness), VGG perceptual (eval-only at best).
+Q2 METRIC: cond_eval = right SEARCH gate, not product north-star. Cheap upgrades:
+all-pairs diversity + bootstrap CI; **visible-render ROUND-TRIP** (insert predicted
+component into real held skin -> render_visible (atlas_ai/torch_cranamp_renderer.py:179)
+-> compare masked visible px to held render); for mockups render(pred skin) vs mockup
+RGB+Sobel+DINO/LPIPS over chrome masks.
+Q3 PAID PLAN: don't extrapolate steps/skin literally; 240-run ~= 19 epochs. Full =
+7787*49 ~= 381k rows; batch48 ~= 8k steps/epoch. Per component: L1+coloraug 8-12 epochs
+(64-95k steps) + cond-disc FT 1-3 epochs (8-24k); hard (EQMAIN/VOLUME/BALANCE/PLEDIT)
+1.5x -> 120-180k. SEQUENTIAL on 1 GPU (parallel fights mem/IO); 1 component/GPU if many.
+49 transforms ENOUGH (more unique skins > more variants). Cond-disc = FT not step0.
+GPU: RunPod L40S 48GB $0.86/hr or RTX6000Ada $0.77/hr (top picks); A100 SXM $1.49;
+Hyperstack A100 $1.35 / L40 $1.00 / A6000 $0.50; Vast cheaper but babysit. => <<$100.
+Q4 LAST PROBES BEFORE LOCK: (1) finish 240 cond-disc FT [GO if div>=.345 gap>=.150
+own<=.285; strong if div>=.36]. (2) SPATIAL cond-D probe, warm-start 240 ckpt 45-60min
+[GO if beats global cond-D by +0.02 div & +0.01 gap, own not worse >.01]. (3) HARD-
+component smoke EQMAIN or VOLUME same recipe 45-60min [GO if no OOM, descends, cond_eval
+non-generic]. "Near lock; not fully locked until 240 cond-disc + one hard component pass."
