@@ -1,15 +1,17 @@
 # Project conventions for AI agents
 
-## V10 (current work): read HANDOFF_V10_SEARCH.md first
+## V11 (current): architecture SEARCH COMPLETE — read HANDOFF_V11_ARCH.md first
 
-V10 = one ML model per skin component (per BMP); input = the WHOLE arbitrary skin
-mockup (never cropped); each model imagines its full sprite atlas incl. all hidden
-states in the input's style. Hard facts, resources, and budget rules live in
-**HANDOFF_V10_SEARCH.md**. Non-negotiables: NEVER crop the input; ≤1 hour per
-training run; the ~70 free Lightning GPU-hrs are for architecture SEARCH (cheap
-1hr probes), not train-to-convergence; the local RTX 2070 is free+unlimited (use
-it first); `skins_raw/` holds 7,957 source skins (the diversity asset); the paid
-full-train comes later at ≤$100.
+One ML model per skin component (per BMP); input = the WHOLE arbitrary skin mockup
+(never cropped); each model imagines its full sprite atlas incl. hidden states in the
+input's style. **The V11 search is DONE and the recipe is LOCKED** — full design,
+every probe, and the finalized PAID FULL-TRAIN RUNBOOK live in **HANDOFF_V11_ARCH.md**
+(read it first). LOCKED recipe: native-res input + paired color-aug + GLOBAL cond-disc
+fine-tune + MAX unique skins (spatial cond-D refuted/off). Next step = the ≤$100 paid
+full-train (user buys GPU; runbook in the handoff). V10 history: HANDOFF_V10_SEARCH.md.
+Non-negotiables: NEVER crop the input; native-res (not 960×1728); cond-disc as FT not
+step 0; the local RTX 2070 is free+unlimited; `skins_raw/` holds 7,787 source skins
+(the diversity asset); paid full-train ≤$100 (est. ~$27–39 on RunPod L40S).
 
 ## Long-running scripts MUST emit progress to stdout
 

@@ -467,3 +467,28 @@ EQMAIN smoke (hardest, 275x315): OOMs at batch6 FP32 on 8GB 2070 -> batch2 train
 => ALL 5 LOCK GATES MET. V11 ARCHITECTURE SEARCH COMPLETE. Recipe LOCKED (see CONSULT #5).
 Free-GPU search hours spent on V11: well under the 70-hr cap. Next = PAID full-train (user
 buys GPU). See "PAID FULL-TRAIN PLAN" + finalized RUNBOOK below.
+
+## >>> PAID FULL-TRAIN RUNBOOK (finalized 2026-05-31) <<<
+Recipe LOCKED (consult #5). User buys GPU; these are the exact steps.
+STEP 0 (free, optional pre-gen): generate full native-res dataset on the rented box (or
+local CPU) — scripts/make_v10_bmp_expert_dataset.py over ALL 7787 skins in skins_raw/,
+--canvas-w 384 (native; height auto), 49 deterministic transforms/skin (+ train-time
+color-aug for extra per-skin diversity). ~7787*49 ~= 381k renders/component-CSV. Reserve
+a DISJOINT held-skin split (~64 skins) for eval. (~3-4 CPU-hr, parallelizable.)
+STEP 1 (paid GPU, sequential per component, 11 total): for each BMP, on RunPod L40S 48GB
+($0.86/hr) or RTX6000Ada ($0.77/hr), batch 48:
+  (a) L1+edge+COLOR-AUG: ~8-12 epochs (~64-95k steps; hard EQMAIN/VOLUME/BALANCE/PLEDIT
+      1.5x -> 120-180k). cmd = train_bmp_expert.py --color-aug --amp --batch 48 --resume
+      --checkpoint-every 2000 --progress-every 200 (NEVER crop input; native-res data).
+  (b) GLOBAL cond-disc FT from (a) best: ~1-3 epochs (~8-24k steps). add --adversarial
+      --cond-disc --adv-weight .03 --fm-weight .5 --d-lr 4e-4 --d-base 48 --d-layers 2
+      --init-from <a/best> --lr 1e-4. (NO --spatial-cond-d: refuted.)
+  Judge each on the DISJOINT held split: cond_eval (regression alarm: div>=.29 gap>=+.13
+  own<=.285) + roundtrip_eval.py (rt_gap>=+.08) where wired. Resumable: forced stop loses
+  <=2000 steps.
+BUDGET: ~31-45 GPU-hr total @ ~$0.86/hr = ~$27-39 (<< $100 cap; 2x margin still under).
+STEP 2: infer_v10.py packages the 11 experts' outputs -> loadable skin.wsz.
+STEP 3 (Gate 4 product): feed a CREATIVE imagegen mockup (KITTENAMP-style PNG) through
+all 11 experts -> render_visible / pack -> eyeball product quality. (User drops PNG.)
+NON-NEGOTIABLES (unchanged): never crop input; native-res; max unique skins; cond-disc
+as FT not step0; spatial cond-D OFF.
