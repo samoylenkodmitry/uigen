@@ -417,3 +417,19 @@ Implemented (commit 34bb14f): D patches cross-attend over render style TOKENS + 
 safe mismatched negative. Clean A/B: SAME 240-skin warm-start as probe(1), --spatial-cond-d.
 Codex go-bar: beat global by +.02 div & +.01 gap, own not worse >.01 => target div>=.341
 gap>=.155 own<=.280. ckpt /tmp/v11_scale240_spatcond_cbuttons.
+
+## PROBE (2) SPATIAL cond-D VERDICT (2026-05-31) — REFUTED (no win)
+Spatial cond-D, same 240 warm-start, step 11881: own .2744 shuf .4154 gap +.1410
+div .3120 ratio .76. A/B at equal warm-start+budget:
+  240 base (no cond):    own .271 gap +.144 div .313 ratio .76
+  (1) GLOBAL cond-disc:  own .270 gap +.145 div .321 ratio .78  <- best
+  (2) SPATIAL cond-D:    own .274 gap +.141 div .312 ratio .76  <- = base, < global
+=> SPATIAL cond-D REFUTED as quick win (below codex +.02 div bar; ~= no-cond base).
+Diversity CEILING (~.31-.32, ratio ~.76) sticky: neither global nor spatial conditioning
+breaks it much at scale. GLOBAL cond-disc stays the (modest) best conditioning lever.
+ckpt /tmp/v11_scale240_spatcond_cbuttons. Code kept (--spatial-cond-d, opt-in, off by default).
+
+## PROBE (3) HARD-COMPONENT SMOKE EQMAIN (2026-05-31) — IN FLIGHT
+EQMAIN (275x116, hardest: 1px slider grooves) L1+color-aug on 240 skins native-res, to
+de-risk paid budget: throughput / OOM / does it descend / cond_eval non-generic (codex
+lock gate 3). ckpt /tmp/v11_eqmain240.
