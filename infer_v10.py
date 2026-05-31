@@ -86,6 +86,10 @@ def main() -> int:
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--no-render", action="store_true",
                     help="Skip the real-Cranamp render step (e.g., for tests).")
+    ap.add_argument("--canvas-w", type=int, default=CANVAS_W,
+                    help="Mockup normalization width. V11 experts trained native-res -> use 384.")
+    ap.add_argument("--canvas-h", type=int, default=CANVAS_H,
+                    help="Mockup normalization height (V11 native-res: 696).")
     ap.add_argument("--demo-state", action="store_true",
                     help="Render with varied (deterministic) EQ/volume/balance/posbar "
                          "positions so the slider sprites are exercised across their "
@@ -96,12 +100,13 @@ def main() -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    # Normalize input to the V10 training canvas (960x1728).
+    # Normalize input to the training canvas (V10: 960x1728; V11 native-res: 384x696).
+    cw, chh = args.canvas_w, args.canvas_h
     with Image.open(args.image) as im:
-        normalized, _scale, _offset = normalize_mockup_image(im, size=(CANVAS_W, CANVAS_H))
+        normalized, _scale, _offset = normalize_mockup_image(im, size=(cw, chh))
     normalized.save(out / "normalized.png")
     render_path_for_loader = out / "normalized.png"
-    render_t = _image_to_tensor(render_path_for_loader, size=(CANVAS_W, CANVAS_H))
+    render_t = _image_to_tensor(render_path_for_loader, size=(cw, chh))
 
     # Run each expert if its checkpoint exists; else fall back to the default BMP.
     ck_root = Path(args.checkpoints)
@@ -109,7 +114,9 @@ def main() -> int:
     used: dict[str, str] = {}
     for spec in TRAINABLE_EXPORT_SPECS:
         stem = Path(spec.file_name).stem
-        ck = ck_root / stem / "last.safetensors"
+        ck = ck_root / stem / "best.safetensors"
+        if not ck.exists():
+            ck = ck_root / stem / "last.safetensors"
         if ck.exists():
             pred = _predict_bmp(ck, render_t, device)
             if pred.shape != (3, spec.h, spec.w):
@@ -121,7 +128,7 @@ def main() -> int:
     (out / "experts_used.json").write_text(json.dumps(used, indent=2))
 
     # PLEDIT.TXT colors from the mockup (deployable; engine will honor them).
-    layout = default_layout(CANVAS_W, CANVAS_H)
+    layout = default_layout(cw, chh)
     pledit_txt = playlist_pledit_text(normalized, layout, default_skin=args.default_skin)
 
     # Package skin.wsz (missing BMPs fill from default).
