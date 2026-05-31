@@ -255,3 +255,21 @@ INPUT-RENDER encoder only (available at product inference):
 SUCCESS (not MAE alone): own-vs-shuffled gap WIDENS beyond 0.27/0.41, pred diversity
 rises toward 0.41 ceiling, grids crisper AND still skin-varying. If both own&shuffled
 improve equally -> just sharpened generic atlas (fail).
+
+## RESUME STATE (2026-05-31) — safe pause point
+Everything committed. Nothing lost on pause. Lightning studio STOPPED (budget intact).
+WHERE WE ARE: model GENERALIZES/conditions (own 0.27 << shuffled 0.41, diversity 0.31
+of 0.41 ceiling); exact-MAE was a misleading gate -> use cond_eval.py (own/shuffled/
+diversity) as the gate. Levers built+committed: native-res, --color-aug (best, held
+0.268), --encoder convnext (eval-bug fixed; best diversity 0.330), --cond-disc
+(conditional projection D + mismatched negatives, codex design).
+IN FLIGHT (free 2070): cond-disc probe = warm-start /tmp/aug_cbuttons/best ->
+conditional adversarial FT (/tmp/cond_test.sh, log /tmp/cond_test.log). On resume:
+read its verdict (>>> COND own/shuffled/gap/diversity vs baseline gap +0.141 div 0.312;
+also view /tmp/cond_cbuttons/eval_held/pred_vs_target_grid.png). 
+NEXT after that (codex plan): (1) if cond-disc widens gap/diversity -> adopt; (2) the
+other pillar = SCALE unique skins (64 is a memorization trap) -> train CBUTTONS on
+240+ unique skins native-res judged by cond_eval; (3) then lock recipe + write the
+<=$100 paid full-train plan (all 7957 skins). Re-consult codex (OUTSIDE sandbox:
+dangerouslyDisableSandbox) at each decision. Probe ckpts live in /tmp (volatile;
+re-runnable). Datasets data_v10n_* + data_v10_skins256 on disk.
