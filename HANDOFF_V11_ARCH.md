@@ -455,3 +455,15 @@ Mask = the 6 visible transport-button rects. LOCK if: rt_gap>=+0.08 OR own<=0.75
 global cond-disc no worse than base by >.01 visible MAE; grid has no systematic wrong-
 color/style buttons. Build for CBUTTONS now; EQMAIN next IF its smoke ckpt exists.
 Q4: spatial cond-D = refuted operationally; no more search shots on it.
+
+## ROUND-TRIP SANITY = PASS + EQMAIN SMOKE = PASS (2026-05-31) — SEARCH COMPLETE
+scripts/roundtrip_eval.py (CBUTTONS, visible 6-button rects, oracle=render of real held
+targets, own vs shuffled): own_vis .2677 shuf_vis .3485 rt_gap +.0808 own/shuf .768
+LOCK_PASS=True; cond-disc vs base delta -.0011 (cond-disc >= base). Grid: predicted
+buttons match each skin's color/material/palette (no systematic wrong-color); glyphs soft
+(L1 sharpness limit codex said NOT to chase; paid train's 64-95k steps + cond-disc sharpen).
+EQMAIN smoke (hardest, 275x315): OOMs at batch6 FP32 on 8GB 2070 -> batch2 trains fine
+(no OOM, mae descends .233->...), de-risking the PAID budget (L40S 48GB handles batch6+).
+=> ALL 5 LOCK GATES MET. V11 ARCHITECTURE SEARCH COMPLETE. Recipe LOCKED (see CONSULT #5).
+Free-GPU search hours spent on V11: well under the 70-hr cap. Next = PAID full-train (user
+buys GPU). See "PAID FULL-TRAIN PLAN" + finalized RUNBOOK below.
