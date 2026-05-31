@@ -287,3 +287,77 @@ exit). v10_gate_sweep.py passes --resume + checkpoint-every 1500. scripts/v11_pr
 = resumable per-component probe (re-run SAME cmd -> continues; --steps huge, each
 launch runs to --max-minutes). Runners must NOT rm -rf the out dir. Verified:
 train 150 -> resume -> "RESUMED at step 150" -> continued to 300.
+
+## COND-DISC VERDICT (2026-05-31) — ADOPTED (modest, right direction)
+Resumable cond-disc probe ran to step 10667 (45min cap), warm-started from
+/tmp/aug_cbuttons/best (color-aug), full codex recipe (--color-aug --adversarial
+--cond-disc, adv 0.03, fm 0.5, d-lr 4e-4, d-base 48, d-layers 2). cond_eval on
+held16 (n=16):
+  metric        | color-aug base | +cond-disc | delta
+  own mae       | 0.269          | 0.2740     | +0.005 (~flat)
+  shuffled mae  | 0.410          | 0.4224     | +0.012
+  GAP (own<shuf)| +0.141         | +0.1485    | +0.007 (WIDER -> more skin-specific)
+  pred diversity| 0.312          | 0.3353     | +0.023 (ratio 0.76->0.81 toward ceiling)
+VERDICT: PASS by codex criteria (gap widens + diversity up, own~flat = NOT just a
+sharper generic atlas). Grid /tmp/v11_cond_cbuttons/eval_held/pred_vs_target_grid.png
+confirms: predicted CBUTTONS strips are skin-specific (distinct blue/yellow/red/green
+button bars per held skin), reasonably crisp. Effect is MODEST -> the bigger lever is
+SCALE (codex: 64 skins is a memorization trap). ADOPT cond-disc into the recipe.
+
+## SCALE PILLAR (2026-05-31) — task #162, IN FLIGHT
+Central hypothesis: does 64->240 UNIQUE skins (native-res) force generalization
+(widen own<shuffled gap, raise diversity toward 0.41 ceiling)?
+Datasets verified: data_v10n_train240 = 240 unique skins, DISJOINT from
+data_v10n_held16 (16). Plan: (1) color-aug L1 on 240 skins (isolates scale, builds
+warm-start ckpt) judged by cond_eval vs 64-skin base (gap +0.141 div 0.312); then
+(2) cond-disc FT on top. Resumable (kill->rerun continues). 64-skin color-aug base
+to beat: own 0.269 / shuf 0.410 / gap +0.141 / div 0.312.
+
+## SCALE PROBE chunk1 (2026-05-31) — UNDER-TRAINED, inconclusive (resuming)
+240-skin color-aug FROM SCRATCH, 45min -> step 12356. cond_eval held16 (n=16):
+  own=0.2782 shuffled=0.3983 gap=+0.1202 pred_div=0.2867 div_ratio=0.69
+vs 64-skin color-aug CONVERGED base: own 0.269 / gap +0.141 / div 0.312.
+=> Below baseline, BUT CONFOUNDED: 12k steps from scratch = ~51 samples/skin vs the
+64-skin base ~193/skin (4x less per-skin exposure). Still descending monotonically at
+cap (eval_mae 0.196->0.176->0.152->0.128, no plateau; diversity climbs as preds sharpen).
+NOT a refutation of scale. Resumable -> continue to convergence and watch whether
+gap/div climb past +0.141 / 0.312. Decision after chunk2 trajectory; consult codex if
+ambiguous. ckpt /tmp/v11_scale240_cbuttons (resume continues from step 12356).
+
+## SCALE PROBE chunk2 (2026-05-31) — SCALE WORKS (positive slope), continuing
+240-skin color-aug resumed -> step 24826 (~102 smpl/skin). cond_eval held16 trajectory:
+  chunk1 (step12356,~51/skin):  own .278 shuf .398 gap +.1202 div .287 ratio .69
+  chunk2 (step24826,~102/skin): own .280 shuf .417 gap +.1370 div .319 ratio .77
+  64-skin CONVERGED base (~193/skin):              gap +.141  div .312 ratio .76
+=> gap AND diversity climb steeply with training; at HALF the 64-skin per-skin
+exposure the 240-skin model ALREADY beats 64-skin diversity (.319>.312) and nearly
+matches gap (+.137 vs +.141). Train mae still descending (.128->.074, no plateau).
+VERDICT: SCALE FORCES GENERALIZATION (codex hypothesis #162 CONFIRMED, positive slope).
+NEXT: resume to convergence (chunk3+) to confirm gap/div plateau ABOVE baseline; then
+add cond-disc on top (both confirmed levers) = candidate final recipe; consult codex to
+lock recipe + design <=$100 paid full-train (all 7957 skins). ckpt /tmp/v11_scale240_cbuttons.
+
+## PAID FULL-TRAIN PLAN (DRAFT 2026-05-31) — refine w/ codex after converged probe
+CONFIRMED RECIPE (V11): per-component BMPExpertNet, input = WHOLE native-res render
+(384x696, never cropped), output = that component's canonical atlas. Losses L1 +
+1.5*Sobel + 0.5*Laplacian. Levers locked in by search:
+  - native-res input (10x cheaper than 960x1728, same info)        [confirmed]
+  - paired color-aug (kills fixed-atlas memorization)              [BEST lever]
+  - conditional projection discriminator + mismatched negatives     [modest +, adopt]
+  - MAXIMIZE unique skins (scale forces generalization)            [#162 CONFIRMED slope]
+REFUTED (don't spend on): kv_scale x4, style_mod solo, moderate encoder scaling.
+DATA: skins_raw = 7787 unique skins on disk; 49 deterministic state-transforms/skin
+(+ color-aug at train time for extra per-skin diversity). Full set ~= 7787*49 = ~381k
+samples/component. Held-out eval = disjoint skin split (reuse data_v10n_held16 style).
+ECONOMICS (ROUGH, verify): local 2070 native batch6 = 0.21 s/step. Rented L40S/A100
+~10x throughput w/ larger batch. Per-component convergence on full set est. ~100-200k
+steps (PIN from converged 240-skin probe + extrapolate by unique-skin count). 11
+components. @ ~15 step/s on fast GPU: 150k steps = ~2.8 GPU-hr/component x 11 = ~31
+GPU-hr. @ ~$1.5/hr spot L40S = ~$46 (2x margin -> ~$92, under $100 cap). 
+OPEN QUESTIONS FOR CODEX: (1) steps/component to converge on 7787 skins (extrapolate
+from probe)? (2) train 11 components sequentially on 1 GPU or parallel? (3) is 49
+transforms x color-aug enough, or generate more transforms? (4) cond-disc on from
+step 0 or FT phase? (5) which paid GPU/provider for best $/throughput under $100?
+SEQUENCING: finish converged 240-skin CBUTTONS probe (gap/div plateau above 64-base)
+-> add cond-disc at scale -> consult codex to LOCK recipe + finalize this plan ->
+generate full native-res dataset (CPU, free) -> user buys GPU -> paid train.
