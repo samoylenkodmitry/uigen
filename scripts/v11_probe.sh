@@ -14,10 +14,10 @@ set -u
 cd "$(dirname "$0")/.."
 VENV="${VENV:-.venv/bin/python}"
 BMP="${BMP:-CBUTTONS.bmp}"; TRAIN="${TRAIN:-data_v10n_train64}"; HELD="${HELD:-data_v10n_held16}"
-OUT="${OUT:-/tmp/v11_${BMP%.bmp}}"; MAXMIN="${MAXMIN:-45}"; EXTRA="${EXTRA:-}"
+OUT="${OUT:-/tmp/v11_${BMP%.bmp}}"; MAXMIN="${MAXMIN:-45}"; EXTRA="${EXTRA:-}"; BATCH="${BATCH:-6}"
 echo "### V11 probe (resumable) bmp=$BMP train=$TRAIN out=$OUT maxmin=$MAXMIN extra=[$EXTRA]"
 $VENV train_bmp_expert.py --data "$TRAIN" --bmp "$BMP" --out "$OUT" --resume \
-  --steps 1000000 --batch 6 --base 48 --attn-dim 256 --dec-ch 128 --heads 4 --attn-layers 2 \
+  --steps 1000000 --batch "$BATCH" --base 48 --attn-dim 256 --dec-ch 128 --heads 4 --attn-layers 2 \
   --query-div 4 --decoder progressive --checkpoint-every 1500 \
   --max-minutes "$MAXMIN" --eval-every 3000 --eval-max-items 192 --progress-every 1000 \
   --num-workers 3 --device cuda $EXTRA

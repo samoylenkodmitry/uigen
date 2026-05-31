@@ -433,3 +433,25 @@ ckpt /tmp/v11_scale240_spatcond_cbuttons. Code kept (--spatial-cond-d, opt-in, o
 EQMAIN (275x116, hardest: 1px slider grooves) L1+color-aug on 240 skins native-res, to
 de-risk paid budget: throughput / OOM / does it descend / cond_eval non-generic (codex
 lock gate 3). ckpt /tmp/v11_eqmain240.
+
+## CODEX CONSULT #5 (2026-05-31) — LOCK THE RECIPE
+DECISION: LOCK. Stop chasing div_ratio (it's a PROXY ceiling — small held set, adjacent-
+pair diversity, hidden atlas px not fully determined by one visible render; product
+success = conditioned VISIBLE plausibility, not exact hidden-atlas diversity). Keep
+div_ratio ONLY as a regression alarm (CBUTTONS fail if div<.29 | gap<+.13 | own>.285).
+
+### >>> LOCKED V11 RECIPE <<<
+native-res input (384x696, NEVER cropped) + paired COLOR-AUG + GLOBAL cond-disc FINE-TUNE
+(warm-start from L1+edge+color-aug; Miyato projection + mismatched-real negatives; NOT
+from step 0) + MAX UNIQUE SKINS. Model = BMPExpertNet (conv enc -> pooled KV -> Fourier-
+query cross-attn -> progressive conv dec -> sigmoid). Loss L1 + 1.5*Sobel + 0.5*Laplacian.
+DROP spatial cond-D (refuted for this budget; code kept opt-in/off via --spatial-cond-d).
+
+### LAST go/no-go before paid train = CBUTTONS ROUND-TRIP sanity (NOT a search loop)
+Minimal (codex Q2): insert predicted CBUTTONS into a held skin's REAL target BMPs ->
+render_visible (atlas_ai/torch_cranamp_renderer.py) -> compare to an ORACLE proxy render
+built from the SAME held target BMPs (NOT the randomized held render — that's confounded).
+Mask = the 6 visible transport-button rects. LOCK if: rt_gap>=+0.08 OR own<=0.75*shuffled;
+global cond-disc no worse than base by >.01 visible MAE; grid has no systematic wrong-
+color/style buttons. Build for CBUTTONS now; EQMAIN next IF its smoke ckpt exists.
+Q4: spatial cond-D = refuted operationally; no more search shots on it.
