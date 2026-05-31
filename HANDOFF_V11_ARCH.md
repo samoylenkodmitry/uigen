@@ -540,3 +540,17 @@ REAL LEAN COST (6191 skins x17, ~5 epochs incl cond-disc, 11 comp +25% hard = ~7
   L4 @33 s/s: ~61 GPU-hr ~ $29 (~2.5d).  T4 @26 (small comps only): ~$15 (~3d).
   => original ~$5-15 was optimistic (assumed ~125 s/s). HONEST lean = ~$15-29.
 NEXT: confirm spend/config with user, then train. Studio STOPPED.
+
+## LEAN TRAIN RUNNING + CATAMP TEST WIRED (2026-05-31)
+RUNNING on L4 (studio scratch-studio-devbox): scripts/train_all_lean.py --data data_v11_lean
+--held data_v11_lean_held --out runs/v11_lean --budget-min 540 (HARD 9h cap; ~$5-6 inside
+the 7.27 free credits; auto_shutdown ON as safety). L1+color-aug+fast-renders, resumable,
+per-atlas batch (EQMAIN b8/mid b16/small b32), per-component cond_eval on held. Poller
+bnboycrfe notifies at DONE. Log: ~/uigen/train_lean.log on studio.
+ON TRAIN DONE: (1) stop studio; (2) ckpts at runs/v11_lean/<STEM>/best.safetensors;
+(3) CATAMP product test (user request) = infer_v10.py --image eval_mockups/caat.png
+(the KITTENAMP cat mockup) --checkpoints runs/v11_lean --canvas-w 384 --canvas-h 696
+--out runs/v11_lean/infer_catamp  (NATIVE-RES flags wired commit 069b8e1; prefers
+best.safetensors) -> skin.wsz + real-Cranamp render; (4) round-trip eval + show user.
+NOTE: lean = free-tier (~1 epoch over 6191 skins) -> SOFT fidelity expected; this is the
+free first product look, not the final quality (paid run = more epochs + cond-disc).
