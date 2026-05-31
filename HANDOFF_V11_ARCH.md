@@ -524,3 +524,19 @@ RECOMMEND: optimize data loading FIRST (cheap CPU pre-pack), then run on L4 (GCP
 ~$19-45) or A100-40 (Lambda, ~1-day turnaround, ~$27-61). All inside $100; free 7.27 credits
 alone won't cover a full-quality run (a lean 8-transform/6-epoch run ~$5-15 could ~fit free).
 Smoke total spend ~ $0.30. Studio STOPPED.
+
+## LEAN BUILD + REAL BENCHMARKS (2026-05-31) — dataset READY on studio
+Lean dataset GENERATED on studio: data_v11_lean = 6191 train skins x17 = 105,247 renders
+(+ data_v11_lean_held 64 skins x17 = 1088), ALL prepacked to renders_npy/. Persists on
+scratch-studio-devbox filesystem (AWS cluster). All clusters reachable incl L4 (GCP)!
+MEASURED throughput (CBUTTONS, native-res, AMP, --fast-renders):
+  T4 16GB  batch16: 0.62 s/step = 26 s/s ($0.19/hr)  [compute-bound; fast-renders no help]
+  L4 24GB  batch32: 0.97 s/step = 33 s/s ($0.48/hr)  [GPU util 98-100% = COMPUTE-bound]
+  L40S 48GB batch48: 0.54 s/step = 89 s/s ($1.91 int/$2.89)  [batch48 OOMs L4 24GB]
+=> Model is COMPUTE-bound at native-res (no data-pipeline fix helps further). $/sample:
+T4 best value (cheap+efficient) but 16GB caps big atlases (EQMAIN 275x315 etc) to small
+batch; L4 fits all at batch 32; L40S fastest.
+REAL LEAN COST (6191 skins x17, ~5 epochs incl cond-disc, 11 comp +25% hard = ~7.2M passes):
+  L4 @33 s/s: ~61 GPU-hr ~ $29 (~2.5d).  T4 @26 (small comps only): ~$15 (~3d).
+  => original ~$5-15 was optimistic (assumed ~125 s/s). HONEST lean = ~$15-29.
+NEXT: confirm spend/config with user, then train. Studio STOPPED.
