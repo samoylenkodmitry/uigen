@@ -217,3 +217,23 @@ CBUTTONS/train64n/held16: +color-aug held 0.268 (vs baseline 0.287), train ROSE
 but correct direction. Tally (held): retrieval 0.337 | kv2 0.293 | base 0.287 |
 style_mod 0.278 | scale240 0.275 | color-aug 0.268. Next: frozen ConvNeXt encoder
 + raw-RGB stream (codex bar: held <=0.22), combined with color-aug.
+
+## CODEX FOLLOW-UP (2026-05-31) — visual collapse + bug + metric reframe
+convnext+aug held 0.287 (= baseline; worse than aug-alone 0.268). VISUAL: held-out
+preds collapse to a generic/average CBUTTONS atlas (mild tint), ~same across unseen
+skins -> known-skin lookup, unknown-skin prior. Codex verdict:
+- BUG: cnx set eval() in __init__ but trainer calls model.train() -> ConvNeXt
+  stochastic-depth reactivated -> ConvNeXt test NOT clean. Pin cnx.eval() in forward
+  before refuting.
+- ADV path is UNCONDITIONAL (disc sees only atlas, not render) -> will just sharpen
+  the generic prior, won't make it skin-specific. Need CONDITIONAL/style-conditioned
+  discriminator. Bring ADV forward only as a sharpness probe.
+- METRIC reframe (do this): own-target vs SHUFFLED-target MAE (conditioning test),
+  pairwise held output diversity, input<->output color/style correlation, visible-vs-
+  hidden region MAE, grids as a first-class gate. Product success = plausible
+  CONDITIONED usable atlas, not exact repro.
+- 64-skin search is a TRAP (anything memorizable). Real probes: maximize UNIQUE
+  skins/hr + paired aug, judged by conditionality. Path = conditional disc + many
+  more unique skins, NOT more 64-skin encoder search.
+- Next probe: warm-start best color-aug ckpt -> short ADV FT, judge by conditionality
+  (own<shuffled, diversity up), not MAE.
