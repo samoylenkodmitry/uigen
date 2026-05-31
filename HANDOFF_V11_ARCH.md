@@ -492,3 +492,10 @@ STEP 3 (Gate 4 product): feed a CREATIVE imagegen mockup (KITTENAMP-style PNG) t
 all 11 experts -> render_visible / pack -> eyeball product quality. (User drops PNG.)
 NON-NEGOTIABLES (unchanged): never crop input; native-res; max unique skins; cond-disc
 as FT not step0; spatial cond-D OFF.
+
+## EQMAIN SMOKE COND (2026-05-31) — strong bonus de-risk
+EQMAIN L1+color-aug, batch2, only step 6258, NO cond-disc yet: own .2421 shuf .4139
+gap +.1718 pred_div .3458 tgt_div .3891 div_ratio .89. => conditions BETTER than CBUTTONS
+(gap +.144 ratio .76) even under-trained — the EQ window bg+sliders carry strong skin-
+specific style. Recipe transfers to the HARDEST component; trains w/o OOM at batch2 on
+8GB (batch48 fine on rented 24GB+). Reinforces the lock. ckpt /tmp/v11_eqmain240.
