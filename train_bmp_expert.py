@@ -147,6 +147,10 @@ def main() -> int:
     p.add_argument("--adv-weight", type=float, default=0.1, help="Weight on the generator adversarial term.")
     p.add_argument("--fm-weight", type=float, default=1.0, help="Weight on discriminator feature-matching loss.")
     p.add_argument("--d-lr", type=float, default=4e-4, help="Discriminator LR (TTUR; > generator LR).")
+    p.add_argument("--cond-disc", action="store_true",
+                   help="V11: CONDITIONAL projection discriminator — D sees the atlas + "
+                        "the render-style code z (from the generator's input encoder), with "
+                        "mismatched-real negatives, to force SKIN-SPECIFIC (not generic) output.")
     p.add_argument("--d-base", type=int, default=64, help="PatchGAN base channels.")
     p.add_argument("--d-layers", type=int, default=3, help="PatchGAN downsample layers.")
     p.add_argument("--init-from", default=None,
@@ -191,7 +195,9 @@ def main() -> int:
         from safetensors.torch import load_file as _load
         init_state = _load(args.init_from)
         missing, unexpected = model.load_state_dict(init_state, strict=False)
-        allowed = {"query_div_buf", "decoder_kind_buf"}
+        allowed = {"query_div_buf", "decoder_kind_buf", "kv_scale_buf", "style_mod_buf",
+                   "encoder_buf", "struct_tokens", "style_mlp.0.weight", "style_mlp.0.bias",
+                   "style_mlp.2.weight", "style_mlp.2.bias"}
         if unexpected or set(missing) - allowed:
             raise SystemExit(f"--init-from mismatch: missing={missing} unexpected={unexpected}")
         print(f"initialized generator from {args.init_from}", flush=True)
@@ -200,7 +206,8 @@ def main() -> int:
     disc = d_opt = None
     if args.adversarial:
         disc = BMPPatchDiscriminator(base=args.d_base, n_layers=args.d_layers,
-                                     min_dim=min(spec.h, spec.w)).to(device)
+                                     min_dim=min(spec.h, spec.w),
+                                     style_dim=(args.attn_dim if args.cond_disc else None)).to(device)
         d_opt = torch.optim.AdamW(disc.parameters(), lr=args.d_lr, betas=(0.5, 0.9),
                                   weight_decay=args.weight_decay)
 
@@ -264,8 +271,31 @@ def main() -> int:
             batch = next(it)
         x = batch["render"].to(device, non_blocking=True)
         y = batch["target"].to(device, non_blocking=True)
-        if disc is not None:
-            # --- Discriminator step (hinge): real target vs detached fake ---
+        if disc is not None and args.cond_disc:
+            # --- CONDITIONAL projection D: atlas + render-style z, with a
+            # mismatched-real negative (real atlas + WRONG skin's z => fake) so D
+            # must judge atlas<->style COMPATIBILITY, not just atlas plausibility. ---
+            out_y, z = model(x, return_style=True)
+            z = z.detach()
+            zw = z.roll(1, 0)                                  # different skin's style (batch roll)
+            d_real, _ = disc(y, z)
+            d_fake, _ = disc(out_y.detach(), z)
+            d_mis, _ = disc(y, zw)
+            d_loss = (F.relu(1.0 - d_real).mean()
+                      + 0.5 * F.relu(1.0 + d_fake).mean()
+                      + 0.5 * F.relu(1.0 + d_mis).mean())
+            d_opt.zero_grad(set_to_none=True); d_loss.backward(); d_opt.step()
+            losses = compute_losses(out_y, y)
+            g_fake, feats_fake = disc(out_y, z)
+            _, feats_real = disc(y, z)
+            g_adv = -g_fake.mean()
+            fm = sum(F.l1_loss(ff, fr.detach()) for ff, fr in zip(feats_fake, feats_real)) \
+                / max(1, len(feats_fake))
+            total = losses["total"] + args.adv_weight * g_adv + args.fm_weight * fm
+            losses["total"] = total; losses["g_adv"] = g_adv.detach(); losses["d_loss"] = d_loss.detach()
+            optimizer.zero_grad(set_to_none=True); total.backward(); optimizer.step()
+        elif disc is not None:
+            # --- Unconditional discriminator step (hinge): real vs detached fake ---
             out_y = model(x)
             d_real, _ = disc(y)
             d_fake, _ = disc(out_y.detach())

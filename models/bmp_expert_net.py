@@ -220,7 +220,7 @@ class BMPExpertNet(nn.Module):
         q = self.query_proj(coords).unsqueeze(0).expand(b, -1, -1)    # [B, qh*qw, attn_dim]
         return q, qh, qw
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_style: bool = False):
         if x.dim() != 4 or x.shape[1] != 3:
             raise ValueError(f"x must be [B,3,H,W], got {tuple(x.shape)}")
         b = x.shape[0]
@@ -253,6 +253,7 @@ class BMPExpertNet(nn.Module):
                 feats.append(f)
         # K/V = concat pooled spatial tokens across scales (~2.4k tokens default).
         kv = torch.cat([fi.flatten(2).transpose(1, 2) for fi in feats], dim=1)  # [B, sumHW, D]
+        z_style = feats[3].mean(dim=(2, 3))   # [B, attn_dim] render style code (for cond-D)
         q, qh, qw = self._query_grid(b, x.device, x.dtype)
         if self.style_mod:
             q = q + self.struct_tokens                                   # shared structure prior
@@ -273,7 +274,8 @@ class BMPExpertNet(nn.Module):
             q = F.interpolate(q, size=(self.target_h, self.target_w), mode="nearest")
         q = self.up1(q)
         q = self.up2(q)
-        return torch.sigmoid(self.head(q))                               # [B, 3, H, W]
+        out = torch.sigmoid(self.head(q))                                # [B, 3, H, W]
+        return (out, z_style) if return_style else out
 
 
 class BMPPatchDiscriminator(nn.Module):
@@ -290,7 +292,8 @@ class BMPPatchDiscriminator(nn.Module):
     Returns (logits, features) — features feed an optional feature-matching loss.
     """
 
-    def __init__(self, base: int = 64, n_layers: int = 3, min_dim: int | None = None):
+    def __init__(self, base: int = 64, n_layers: int = 3, min_dim: int | None = None,
+                 style_dim: int | None = None):
         super().__init__()
         # Auto-cap stride-2 downsamples so the smaller target dim stays workable
         # (thin/small BMPs). Only the k4-s2 layers shrink; the final conv + head
@@ -311,15 +314,27 @@ class BMPPatchDiscriminator(nn.Module):
         layers += [sn(ch, nxt, 3, 1), nn.LeakyReLU(0.2, inplace=True)]  # size-preserving
         self.body = nn.ModuleList(layers)
         self.head = sn(nxt, 1, 3, 1)
+        # Conditional projection head (Miyato): scores "is this atlas patch
+        # compatible with this render-style code z?" z comes from the generator's
+        # input-render encoder (available at product inference). Off if style_dim None.
+        self._final_ch = nxt
+        if style_dim is not None:
+            self.style_ln = nn.LayerNorm(style_dim)
+            self.style_proj = nn.Linear(style_dim, nxt)
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, z: torch.Tensor | None = None):
         feats = []
         h = x
         for m in self.body:
             h = m(h)
             if isinstance(m, nn.LeakyReLU):
                 feats.append(h)
-        return self.head(h), feats
+        logits = self.head(h)
+        if z is not None and hasattr(self, "style_proj"):
+            s = self.style_proj(self.style_ln(z))                     # [B, C]
+            proj = (h * s[:, :, None, None]).sum(1, keepdim=True) / (self._final_ch ** 0.5)
+            logits = logits + proj
+        return logits, feats
 
 
 __all__ = ["BMPExpertNet", "BMPPatchDiscriminator"]
