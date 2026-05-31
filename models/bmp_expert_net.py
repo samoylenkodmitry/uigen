@@ -225,6 +225,8 @@ class BMPExpertNet(nn.Module):
             raise ValueError(f"x must be [B,3,H,W], got {tuple(x.shape)}")
         b = x.shape[0]
         if self.encoder == "convnext":
+            self.cnx.eval()  # keep frozen backbone in eval even under model.train()
+                             # (else ConvNeXt stochastic-depth reactivates — codex bug)
             with torch.no_grad():                      # frozen backbone
                 h = (x - self.imnet_mean) / self.imnet_std
                 stages = []
