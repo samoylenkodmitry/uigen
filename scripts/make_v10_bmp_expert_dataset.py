@@ -47,6 +47,12 @@ TRAINABLE_NAMES = [s.file_name for s in TRAINABLE_EXPORT_SPECS]
 
 # Per-scale variant caps per family. Schedule mirrors HANDOFF_V10's coverage plan.
 SCALE_CAPS = {
+    # ~17 variants/skin for the LEAN full-skin train (all 7787 skins fit disk +
+    # budget): keep transport (cbuttons/posbar) + a few EQ-slider sweeps (EQMAIN's
+    # conditioning signal) + base/colorway coverage; color-aug adds per-skin variety.
+    "lean": dict(base=2, volume=1, balance=1, cbuttons=2, shufrep=1,
+                 playpaus=1, posbar=2, eq_band=3, eq_random=1,
+                 eq_onoff=1, pledit=1, extra=1),
     "smoke": dict(base=4, volume=4, balance=4, cbuttons=4, shufrep=4,
                   playpaus=3, posbar=4, eq_band=8, eq_random=4,
                   eq_onoff=2, pledit=4, extra=4),
