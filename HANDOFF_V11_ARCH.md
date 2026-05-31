@@ -193,9 +193,27 @@ EVAL CAVEAT: exact held-out MAE on hidden states is partly ill-posed (artist
 choices unidentifiable from one render); judge by visible-region accuracy + style
 plausibility, not hit5 alone. Add visible-vs-hidden atlas masks to eval.
 
+## PROBE RESULTS (2026-05-31, native, CBUTTONS, held16)
+- #1 RETRIEVAL FLOOR: held mae 0.337 (nearest train skin by render style feat ->
+  copy its atlas). Learned model 0.287 BEATS it -> model learns something general,
+  weakly; not below a trivial floor. Retrieval-conditioning not urgent.
+  (/tmp/retrieval_baseline.py)
+- #2 PAIRED COLOR AUG: running (train64n + --color-aug vs baseline 0.287).
+- Levers now in code (all buffered/flagged, baseline byte-identical): native-res
+  (default on via render size), --kv-scale (refuted), --style-mod (refuted solo),
+  --color-aug (testing). TODO per codex: frozen ConvNeXt/DINOv2 encoder + raw-RGB
+  stream; atlas-grammar queries; atlas-AE prior.
+
 ## Status / ledger
 - 256 diverse skins extracted (data_v10_skins256); held16 / train16 / train64
   render sets built (smoke views). s16/s64 scaling done (see HANDOFF_V10_SEARCH).
 - NEXT: implement richer-K/V variant in models/bmp_expert_net.py behind a knob
   (buffered for ckpt rebuild), A/B vs avg-pool on held-out. THINK before each
   step; write results here.
+
+## PROBE #2 result (2026-05-31): paired color-aug HELPS (best lever so far)
+CBUTTONS/train64n/held16: +color-aug held 0.268 (vs baseline 0.287), train ROSE
+0.019->0.029. train-up/held-down = reduced memorization (codex predicted). Modest
+but correct direction. Tally (held): retrieval 0.337 | kv2 0.293 | base 0.287 |
+style_mod 0.278 | scale240 0.275 | color-aug 0.268. Next: frozen ConvNeXt encoder
++ raw-RGB stream (codex bar: held <=0.22), combined with color-aug.
