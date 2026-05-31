@@ -153,6 +153,46 @@ learned from scratch on few skins. Consider after the FiLM factorization.
 TEST: same CBUTTONS/train64->held16 native protocol; expect held-out to drop
 substantially vs 0.287 if the factorization is the missing bias.
 
+## style_mod REFUTED too (2026-05-31) — cheap arch levers exhausted
+CBUTTONS/train64n/held16n native (converged): baseline 0.287, kv2 0.293, style_mod
+0.278, scale240 0.275. ALL ~0.28 held-out, train ~0.02. Conditioning richness,
+structure/style FiLM factorization, and moderate scaling do NOT fix generalization
+-> it's a REPRESENTATION + DATA-SCALE problem, not a small-tweak problem.
+Two bigger levers remain (pick with user):
+  (1) PRETRAINED image encoder (DINOv2/ConvNeXt) for transferable features instead
+      of training the encoder from scratch on few skins — standard generalize-from-
+      limited-data fix; highest-leverage untested. Test: pretrained-enc vs scratch
+      on CBUTTONS/64skins/held16 (decisive: if held drops a lot, representation was
+      the issue).
+  (2) Train at much larger scale (100s-1000s skins, converged) — scaling curve is
+      downward but slow (0.31->0.287->0.275 for 16->64->240); may need paid phase.
+
+## CODEX CONSULT (2026-05-31, gpt-5.5) — adopted plan
+(Consult prompt: /tmp/codex_prompt.txt. Run codex OUTSIDE the sandbox — in-sandbox
+SIGURGs it; `dangerouslyDisableSandbox` works.) Verdict: representation +
+inductive-bias problem, NOT capacity. Don't bet on scaling alone. Stop: bigger KV,
+bigger scratch decoders, pure scaling, U-Net/copy paths.
+Adopted probe order (CBUTTONS first, native, fixed held16, eval @15/30/60min;
+maximize UNIQUE skins/hr not variants/skin):
+  1. RETRIEVAL BASELINE (no training): nearest train skin by render features/color
+     hist -> output its atlas. If it beats 0.275, the learned model is below a
+     trivial floor. Sanity floor.
+  2. PAIRED EQUIVARIANT AUG (cheap, no arch): apply the SAME random color/gamma/
+     hue/posterize transform to BOTH render input AND target atlas -> colorway
+     changes every sample -> kills fixed-atlas memorization, forces reading style
+     from input. (Input-only jitter is WRONG — breaks supervision.) Highest-value
+     cheap lever.
+  3. FROZEN ConvNeXt-Tiny encoder + shallow raw-RGB stream -> patch tokens into
+     cross-attn (NOT CLS). Success: held CBUTTONS <=0.22.
+  4. FROZEN DINOv2-S/14 + RGB stream (prefer if creative-mockup samples better).
+  5. ATLAS-GRAMMAR QUERIES: add slot/state/frame/local-UV/part_id query feats.
+  6. ATLAS AUTOENCODER PRIOR (VQ/KL on target atlases) -> render->latent. Bridge
+     to latent generation without diffusion cost.
+  7. ADVERSARIAL FT LAST (sharpens/imagines; won't fix representation).
+EVAL CAVEAT: exact held-out MAE on hidden states is partly ill-posed (artist
+choices unidentifiable from one render); judge by visible-region accuracy + style
+plausibility, not hit5 alone. Add visible-vs-hidden atlas masks to eval.
+
 ## Status / ledger
 - 256 diverse skins extracted (data_v10_skins256); held16 / train16 / train64
   render sets built (smoke views). s16/s64 scaling done (see HANDOFF_V10_SEARCH).

@@ -47,9 +47,15 @@ class BMPExpertDataset(Dataset):
     """
 
     def __init__(self, root: str | Path, bmp_file_name: str, *,
-                 csv_path: str | Path | None = None):
+                 csv_path: str | Path | None = None, color_aug: bool = False):
         self.root = Path(root)
         self.bmp_file_name = bmp_file_name
+        # Paired equivariant color augmentation (training only): the SAME random
+        # per-channel gain/bias/gamma is applied to BOTH the render input AND the
+        # target atlas, so the colorway changes every sample -> the model cannot
+        # memorize a fixed atlas per skin and must READ the style from the input
+        # (the anti-memorization lever; input-only jitter would break supervision).
+        self.color_aug = bool(color_aug)
         csv_p = Path(csv_path) if csv_path else self.root / "csv" / f"train_{Path(bmp_file_name).stem}.csv"
         if not csv_p.exists():
             raise FileNotFoundError(f"V10 CSV not found: {csv_p}")
@@ -79,8 +85,15 @@ class BMPExpertDataset(Dataset):
         r = self.rows[index]
         render = _image_to_tensor(self.root / r["render_png"], size=self.input_size)
         target = _image_to_tensor(self.root / r["target_bmp"], size=self.target_size)
+        if self.color_aug:
+            # same per-channel gamma/gain/bias for render AND target (equivariant)
+            g = torch.empty(3, 1, 1).uniform_(0.6, 1.5)        # gamma
+            a = torch.empty(3, 1, 1).uniform_(0.6, 1.4)        # gain
+            bch = torch.empty(3, 1, 1).uniform_(-0.08, 0.08)   # bias
+            render = (render.clamp(1e-6, 1.0).pow(g) * a + bch).clamp(0, 1)
+            target = (target.clamp(1e-6, 1.0).pow(g) * a + bch).clamp(0, 1)
         return {
-            "render": render,   # [3, 1728, 960]
+            "render": render,   # [3, H_in, W_in] (native render size)
             "target": target,   # [3, H, W]
             "skin_id": r["skin_id"],
             "variant_id": r["variant_id"],

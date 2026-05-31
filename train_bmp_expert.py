@@ -110,6 +110,10 @@ def main() -> int:
                    help="Multiply cross-attention K/V pool resolution. 1 = default "
                         "(~2.4k tokens, lossy). >1 = richer conditioning (V11) so the "
                         "model can read input detail and generalize style->atlas.")
+    p.add_argument("--color-aug", action="store_true",
+                   help="V11: paired equivariant color aug — same random gamma/gain/"
+                        "bias on BOTH render and target each sample. Breaks fixed-atlas "
+                        "memorization, forces reading style from input. Train only.")
     p.add_argument("--style-mod", action="store_true",
                    help="V11: factorize shared structure (learned struct tokens) x "
                         "per-skin style (FiLM-modulated decoder from global encoder "
@@ -169,7 +173,7 @@ def main() -> int:
 
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
-    ds = BMPExpertDataset(args.data, args.bmp)
+    ds = BMPExpertDataset(args.data, args.bmp, color_aug=args.color_aug)
     loader = DataLoader(ds, batch_size=args.batch, shuffle=True, drop_last=False,
                         num_workers=args.num_workers, pin_memory=(device.type == "cuda"))
 
