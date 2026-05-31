@@ -499,3 +499,28 @@ gap +.1718 pred_div .3458 tgt_div .3891 div_ratio .89. => conditions BETTER than
 (gap +.144 ratio .76) even under-trained — the EQ window bg+sliders carry strong skin-
 specific style. Recipe transfers to the HARDEST component; trains w/o OOM at batch2 on
 8GB (batch48 fine on rented 24GB+). Reinforces the lock. ckpt /tmp/v11_eqmain240.
+
+## LIGHTNING SMOKE — REAL THROUGHPUT NUMBERS (2026-05-31)
+Studio scratch-studio-devbox (teamspace gpu-model-development-project, AWS cluster).
+Env: system python, torch 2.8.0+cu128, torchvision, PIL, numpy, safetensors ALL present
+(no venv build). Repo pulled to current. skins_raw was EMPTY on studio -> uploaded an
+80-skin tar slice (SDK per-file upload 501s on filenames with parens -> use TAR + extract).
+Gen: extract_wsz_skins (62/80 accepted) -> make_v10_bmp_expert_dataset gate1 canvas-w 384
+(24 skins, 6160 CBUTTONS rows). MEASURED (CBUTTONS, AMP, native-res 384x696):
+  T4 16GB:   batch 16 (32 OOMs!) -> 0.61 s/step = 26.2 samples/s. $0.19/hr (AWS).
+  L40S 48GB: batch 48 -> 0.54 s/step = 88.9 samples/s. $2.89/hr od / $1.91 interruptible.
+KEY FINDING: run is DATA-LOADING-BOUND (L40S only 3.4x T4, not ~6-8x) — PIL-decoding
+384x696 PNGs in the dataloader is the ceiling. Codex's ~$27-39 assumed ~460 samples/s
+(compute-bound); reality is ~89 s/s UNTIL we optimize data loading (pre-pack renders to
+.pt/webdataset, more workers, RAM cache) -> ~2.5x throughput, big GPUs then cost-effective.
+T4 16GB caps at batch 16 for CBUTTONS (and won't fit EQMAIN well) -> 24GB+ (L4/A100/L40S)
+needed for batch 48. Cheaper GPUs ARE reachable via other clusters: cloud_accounts incl
+gcp-lightning-public-prod (L4 $0.48, A100-80 $2.71) + lightning-lambda-prod (A100-40 $1.29);
+A100-40 NOT on the AWS cluster (switch_machine 400).
+COST EST (balanced: all 7787 skins x16 transforms x10 epochs x11 comp +25% hard = ~17M passes):
+  current pipeline: T4 ~180h~$34 (7d); L4 ~94h~$45 (4d); A100-40 ~47h~$61 (2d); L40S ~53h~$101 (bad value).
+  +data-pipeline fix (~2.5x): A100-40 ~21h~$27 (1d); L4 ~38h~$19 (1.6d); L40S ~21h~$40.
+RECOMMEND: optimize data loading FIRST (cheap CPU pre-pack), then run on L4 (GCP, cheapest,
+~$19-45) or A100-40 (Lambda, ~1-day turnaround, ~$27-61). All inside $100; free 7.27 credits
+alone won't cover a full-quality run (a lean 8-transform/6-epoch run ~$5-15 could ~fit free).
+Smoke total spend ~ $0.30. Studio STOPPED.
