@@ -46,10 +46,13 @@ def main() -> int:
     ap.add_argument("--budget-min", type=float, default=540.0, help="HARD total GPU-min cap.")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--min-slice", type=float, default=8.0, help="Skip a component if < this many min left.")
+    ap.add_argument("--components", default="", help="Comma list to train (default ALL in ORDER); "
+                    "use to resume only the remaining components.")
     args = ap.parse_args()
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
-    comps = [c for c in ORDER if f"{c}.bmp" in SPEC]
+    want = [c.strip().upper() for c in args.components.split(",") if c.strip()] if args.components else None
+    comps = [c for c in ORDER if f"{c}.bmp" in SPEC and (want is None or c in want)]
     print(f"train_all_lean: {len(comps)} comps, budget {args.budget_min:.0f} GPU-min, "
           f"data={args.data}", flush=True)
 
