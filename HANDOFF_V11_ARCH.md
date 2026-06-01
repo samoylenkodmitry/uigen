@@ -554,3 +554,19 @@ ON TRAIN DONE: (1) stop studio; (2) ckpts at runs/v11_lean/<STEM>/best.safetenso
 best.safetensors) -> skin.wsz + real-Cranamp render; (4) round-trip eval + show user.
 NOTE: lean = free-tier (~1 epoch over 6191 skins) -> SOFT fidelity expected; this is the
 free first product look, not the final quality (paid run = more epochs + cond-disc).
+
+## FREE-TIER TRAIN RESULTS (2026-06-01) — conditioning needs per-skin exposure
+Auto_shutdown KILLED the first full run at ~198min (idle-timer counts interactive, NOT bg
+GPU work -> NEVER use auto_shutdown for detached training; disable it + keepalive-poll).
+FULL-6191 ~1 epoch: ALL components gap ~+0.003, div_ratio ~0.07 = ZERO conditioning
+(POSBAR/PLAYPAUS/MONOSTER/SHUFREP). => ~1 epoch over 6191 skins learns only the mean.
+CONCENTRATED 1000-skin, ~45min/comp (data_v11_lean1k, runs/v11_lean1k):
+  EQMAIN gap +.143 div_ratio .78  ✅   BALANCE gap +.106 ratio .69  ✅
+  MAIN +.004 / CBUTTONS +.003 / TITLEBAR +.003 / VOLUME +.002  ❌ (generic, ratio ~.08)
+KEY LAW: conditioning ~ SAMPLES-PER-SKIN exposure (240-probe conditioned at ~300/skin;
+here ~89/skin). EQMAIN/BALANCE have strong intrinsic style -> condition at low exposure;
+flat components (CBUTTONS/MAIN/TITLEBAR/VOLUME) need ~300+/skin. => the PAID run must
+budget ~300 samples/skin/component (not just "epochs"): for 6191 skins thats ~1.9M
+samples/comp -> the ~$20-30 estimate holds for REAL conditioning. Free tier = EQMAIN+
+BALANCE condition only.
+CATAMP TEST: render shows cat-styling on EQ window (EQMAIN✅) + balance; generic elsewhere.
